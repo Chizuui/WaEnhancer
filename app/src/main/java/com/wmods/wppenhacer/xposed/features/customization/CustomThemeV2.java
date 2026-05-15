@@ -223,7 +223,7 @@ public class CustomThemeV2 extends Feature {
                 if (checkNotHomeActivity())
                     return;
                 var background = viewGroup.getBackground();
-                replaceColor(background, navAlpha);
+                replaceColor(background, navAlpha, true);
             }
         });
 
@@ -242,7 +242,7 @@ public class CustomThemeV2 extends Feature {
                         return;
                     if (checkNotApplyColor(typedValue.data))
                         return;
-                    typedValue.data = IColors.getFromIntColor(typedValue.data, IColors.colors);
+                    typedValue.data = IColors.getFromIntColor(typedValue.data, IColors.colors, false);
                 }
             }
         });
@@ -252,18 +252,30 @@ public class CustomThemeV2 extends Feature {
         XposedBridge.hookAllMethods(resourceImpl, "loadDrawable", new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                var activity = WppCore.getCurrentActivity();
+                if (activity == null) return;
+                var name = activity.getClass().getSimpleName();
+                if (!name.equals("HomeActivity") && !name.equals("Conversation") && 
+                    !name.contains("ContactPicker") && !name.contains("Forward"))
+                    return;
                 var drawable = (Drawable) param.getResult();
-                replaceColor(drawable, IColors.colors);
+                replaceColor(drawable, IColors.colors, false);
             }
         });
 
         XposedBridge.hookAllMethods(resourceImpl, "loadColorStateList", new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                var activity = WppCore.getCurrentActivity();
+                if (activity == null) return;
+                var name = activity.getClass().getSimpleName();
+                if (!name.equals("HomeActivity") && !name.equals("Conversation") && 
+                    !name.contains("ContactPicker") && !name.contains("Forward"))
+                    return;
                 var colorStateList = (ColorStateList) param.getResult();
                 var mColors = (int[]) XposedHelpers.getObjectField(colorStateList, "mColors");
                 for (var i = 0; i < mColors.length; i++) {
-                    mColors[i] = IColors.getFromIntColor(mColors[i], IColors.colors);
+                    mColors[i] = IColors.getFromIntColor(mColors[i], IColors.colors, true);
                 }
             }
         });
@@ -494,21 +506,21 @@ public class CustomThemeV2 extends Feature {
         return "Custom Theme V2";
     }
 
-    public static class IntBgColorHook extends XC_MethodHook {
-
+    private class IntBgColorHook extends XC_MethodHook {
         @Override
         protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-            var color = (int) param.args[0];
-
-            if (param.thisObject instanceof TextView textView) {
-                var id = Utils.getID("conversations_row_message_count", "id");
-                if (textView.getId() == id) {
-                    return;
-                }
-            } else if (param.thisObject instanceof Paint) {
+            var activity = WppCore.getCurrentActivity();
+            if (activity == null) return;
+            var name = activity.getClass().getSimpleName();
+            if (!name.equals("HomeActivity") && !name.equals("Conversation") && 
+                !name.contains("ContactPicker") && !name.contains("Forward"))
                 return;
+
+            int color = (int) param.args[0];
+            int newColor = IColors.getFromIntColor(color, IColors.colors, true);
+            if (newColor != color) {
+                param.args[0] = newColor;
             }
-            param.args[0] = IColors.getFromIntColor(color, IColors.colors);
         }
     }
 

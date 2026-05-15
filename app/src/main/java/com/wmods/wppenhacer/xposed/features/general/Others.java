@@ -574,6 +574,8 @@ public class Others extends Feature {
         XposedHelpers.findAndHookMethod(View.class, "onAttachedToWindow", new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                var activity = WppCore.getCurrentActivity();
+                if (activity == null) return;
                 var view = (View) param.thisObject;
                 int id = view.getId();
                 if (id > 0 && idsFilter.contains(id)) {
@@ -586,6 +588,8 @@ public class Others extends Feature {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                 if ((int) param.args[0] == View.VISIBLE) {
+                    var activity = WppCore.getCurrentActivity();
+                    if (activity == null) return;
                     var view = (View) param.thisObject;
                     int id = view.getId();
                     if (id > 0 && idsFilter.contains(id)) {

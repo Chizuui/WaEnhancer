@@ -32,7 +32,7 @@ public class DrawableColors {
     private static final HashMap<Bitmap, Integer> ninePatchs = new HashMap<>();
     private static Class<?> mMaterialShapeDrawableClass;
 
-    public static void replaceColor(Drawable drawable, HashMap<String, String> colors) {
+    public static void replaceColor(Drawable drawable, HashMap<String, String> colors, boolean isBackground) {
         if (drawable == null) return;
         Class cls = null;
         if (drawable instanceof StateListDrawable stateListDrawable) {
@@ -40,34 +40,34 @@ public class DrawableColors {
             for (int i = 0; i < count; i++) {
                 var stateDrawable = StateListDrawableCompact.getStateDrawable(stateListDrawable, i);
                 if (stateDrawable != null)
-                    replaceColor(stateDrawable, colors);
+                    replaceColor(stateDrawable, colors, isBackground);
             }
         } else if (drawable instanceof GradientDrawable gradientDrawable) {
             var gradientColors = gradientDrawable.getColors();
             if (gradientColors != null) {
                 for (var i = 0; i < gradientColors.length; i++) {
                     var color = gradientColors[i];
-                    var newColor = IColors.getFromIntColor(color, colors);
+                    var newColor = IColors.getFromIntColor(color, colors, isBackground);
                     if (color == newColor) continue;
                     gradientColors[i] = newColor;
                 }
                 gradientDrawable.setColors(gradientColors);
             }
         } else if (drawable instanceof DrawableWrapper drawableWrapper) {
-            replaceColor(drawableWrapper.getDrawable(), colors);
+            replaceColor(drawableWrapper.getDrawable(), colors, isBackground);
         } else if (drawable instanceof NinePatchDrawable ninePatchDrawable) {
             var color = getNinePatchDrawableColor(ninePatchDrawable);
-            var newColor = IColors.getFromIntColor(color, colors);
+            var newColor = IColors.getFromIntColor(color, colors, isBackground);
             if (color == newColor) return;
             ninePatchDrawable.setTintList(ColorStateList.valueOf(newColor));
         } else if (drawable instanceof ColorDrawable colorDrawable) {
             var color = getColorDrawableColor(colorDrawable);
-            var newColor = IColors.getFromIntColor(color, colors);
+            var newColor = IColors.getFromIntColor(color, colors, isBackground);
             if (newColor == color) return;
             colorDrawable.setColor(newColor);
         } else if (drawable instanceof ShapeDrawable shapeDrawable) {
             var color = getShapeDrawableColor(shapeDrawable);
-            var newColor = IColors.getFromIntColor(color, colors);
+            var newColor = IColors.getFromIntColor(color, colors, isBackground);
             if (color == newColor) return;
             shapeDrawable.getPaint().setColor(newColor);
         } else if (drawable instanceof LevelListDrawable levelListDrawable) {
@@ -75,7 +75,7 @@ public class DrawableColors {
             for (int i = 0; i < count; i++) {
                 Drawable levelDrawable = (Drawable) XposedHelpers.callMethod(levelListDrawable, "getDrawable", i);
                 if (levelDrawable != null) {
-                    replaceColor(levelDrawable, colors);
+                    replaceColor(levelDrawable, colors, isBackground);
                 }
             }
         } else if (drawable instanceof TransitionDrawable transitionDrawable) {
@@ -83,7 +83,7 @@ public class DrawableColors {
             for (int i = 0; i < count; i++) {
                 Drawable layerDrawable = transitionDrawable.getDrawable(i);
                 if (layerDrawable != null) {
-                    replaceColor(layerDrawable, colors);
+                    replaceColor(layerDrawable, colors, isBackground);
                 }
             }
         } else if (drawable instanceof LayerDrawable layerDrawable) {
@@ -92,14 +92,14 @@ public class DrawableColors {
             for (var childDrawable : mChildren) {
                 if (childDrawable != null) {
                     var drawable1 = (Drawable) XposedHelpers.getObjectField(childDrawable, "mDrawable");
-                    replaceColor(drawable1, colors);
+                    replaceColor(drawable1, colors, isBackground);
                 }
             }
         } else if (drawable instanceof DrawableContainer drawableContainer) {
             var containerState = drawableContainer.getConstantState();
             var drawables = (Drawable[]) XposedHelpers.getObjectField(containerState, "mDrawables");
             for (var drawable1 : drawables) {
-                replaceColor(drawable1, colors);
+                replaceColor(drawable1, colors, isBackground);
             }
         } else if ((cls = getMaterialShapeDrawable()) != null && cls.isInstance(drawable)) {
             var state = (Drawable.ConstantState) XposedHelpers.callMethod(drawable, "getConstantState");
@@ -108,7 +108,7 @@ public class DrawableColors {
                 var colorStateList = (ColorStateList) ReflectionUtils.getObjectField(colorState, state);
                 if (colorStateList == null) continue;
                 var color = colorStateList.getDefaultColor();
-                var newColor = IColors.getFromIntColor(color, colors);
+                var newColor = IColors.getFromIntColor(color, colors, isBackground);
                 if (color == newColor) continue;
                 var colorStateListNew = ColorStateList.valueOf(newColor);
                 ReflectionUtils.setObjectField(colorState, state, colorStateListNew);
@@ -117,7 +117,7 @@ public class DrawableColors {
             for (var paintField : paintFields) {
                 var paint = (Paint) ReflectionUtils.getObjectField(paintField, drawable);
                 var color = paint.getColor();
-                var newColor = IColors.getFromIntColor(color, colors);
+                var newColor = IColors.getFromIntColor(color, colors, isBackground);
                 if (color == newColor) continue;
                 paint.setColor(newColor);
             }
