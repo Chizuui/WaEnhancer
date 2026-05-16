@@ -658,6 +658,8 @@ public class Others extends Feature {
     }
 
     private void hookSearchbar(String filterChats) throws Exception {
+        if (Objects.equals(filterChats, "2")) return;
+        
         Method searchbar = Unobfuscator.loadViewAddSearchBarMethod(classLoader);
         var searchBarID = Utils.getID("my_search_bar", "id");
 
