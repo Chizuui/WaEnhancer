@@ -28,6 +28,7 @@ import com.wmods.wppenhacer.xposed.utils.Utils;
 import org.json.JSONObject;
 import org.luckypray.dexkit.query.enums.StringMatchType;
 
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -59,6 +60,7 @@ public class Others extends Feature {
     public void doHook() throws Exception {
 
         // receivedIncomingTimestamp
+        suppressNotificationMediaProviderCrash();
 
         properties = Utils.getProperties(prefs, "custom_css", "custom_filters");
 
@@ -255,6 +257,40 @@ public class Others extends Feature {
             disableHomeFilters();
         }
 
+    }
+
+    private void suppressNotificationMediaProviderCrash() {
+        try {
+            XposedHelpers.findAndHookMethod(Thread.class, "dispatchUncaughtException", Throwable.class, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    var throwable = (Throwable) param.args[0];
+                    if (isNotificationMediaProviderCloseCrash((Thread) param.thisObject, throwable)) {
+                        logDebug("Suppressed WhatsApp MediaProvider notification crash", throwable);
+                        param.setResult(null);
+                    }
+                }
+            });
+        } catch (Throwable e) {
+            logDebug(e);
+        }
+    }
+
+    private boolean isNotificationMediaProviderCloseCrash(Thread thread, Throwable throwable) {
+        if (!(throwable instanceof IOException)) return false;
+        if (!Objects.equals(throwable.getMessage(), "close failed: EPERM (Operation not permitted)")) return false;
+
+        var threadName = thread != null ? thread.getName() : "";
+        if (!TextUtils.isEmpty(threadName) && !"Notifications".equals(threadName) && !threadName.toLowerCase().contains("notification")) {
+            return false;
+        }
+
+        for (var stackTraceElement : throwable.getStackTrace()) {
+            if ("com.whatsapp.media.contentprovider.MediaProvider".equals(stackTraceElement.getClassName())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void disableHomeFilters() throws Exception {
