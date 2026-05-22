@@ -240,11 +240,22 @@ public class Unobfuscator {
         return UnobfuscatorCache.getInstance().getMethod(classLoader, () -> {
             var methodReceipt = getDexKit().getMethodData(loadReceiptMethod(classLoader));
             var classData = methodReceipt.getDeclaredClass();
-            var methodData = classData.findMethod(FindMethod.create().matcher(MethodMatcher.create()
+            var methods = classData.findMethod(FindMethod.create().matcher(MethodMatcher.create()
                     .addInvoke(methodReceipt.getDescriptor())
                     .addUsingString("class")
-            )).single();
-            return methodData.getMethodInstance(classLoader);
+            ));
+            if (methods.isEmpty()) {
+                throw new NoSuchMethodException("loadReceiptMainCallerMethod: no matching methods found");
+            }
+            if (methods.size() == 1) {
+                return methods.get(0).getMethodInstance(classLoader);
+            }
+            for (var method : methods) {
+                if (Modifier.isStatic(method.getModifiers()) && method.getParamCount() == 1) {
+                    return method.getMethodInstance(classLoader);
+                }
+            }
+            throw new NoSuchMethodException("loadReceiptMainCallerMethod: query returned " + methods.size() + " results, but none matched static and 1 param filters");
         });
     }
 
