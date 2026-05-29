@@ -145,6 +145,44 @@ class WppXposed : IXposedHookLoadPackage, IXposedHookInitPackageResources, IXpos
     @Throws(Throwable::class)
     override fun initZygote(startupParam: IXposedHookZygoteInit.StartupParam) {
         MODULE_PATH = startupParam.modulePath
+
+        // Hook to bypass/suppress EPERM exceptions during close of files/file descriptors globally at Zygote level
+        try {
+            XposedHelpers.findAndHookMethod(
+                "libcore.io.IoBridge",
+                null,
+                "closeAndSignalBlockedThreads",
+                java.io.FileDescriptor::class.java,
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val throwable = param.throwable
+                        if (throwable is java.io.IOException) {
+                            val message = throwable.message
+                            if (message != null && (message.contains("EPERM") || message.contains("Operation not permitted"))) {
+                                val processName = if (android.os.Build.VERSION.SDK_INT >= 28) {
+                                    android.app.Application.getProcessName()
+                                } else {
+                                    try {
+                                        Class.forName("android.app.ActivityThread")
+                                            .getDeclaredMethod("currentProcessName")
+                                            .invoke(null) as? String
+                                    } catch (_: Throwable) {
+                                        null
+                                    }
+                                }
+                                if (processName != null && (processName.startsWith("com.whatsapp") || processName.startsWith("com.whatsapp.w4b"))) {
+                                    XposedBridge.log("WaEnhancer: Suppressed EPERM IOException during close in WhatsApp ($processName)")
+                                    param.throwable = null
+                                }
+                            }
+                        }
+                    }
+                }
+            )
+            XposedBridge.log("WaEnhancer: Successfully hooked IoBridge in initZygote")
+        } catch (t: Throwable) {
+            XposedBridge.log("WaEnhancer: Failed to hook IoBridge in initZygote: " + t.message)
+        }
     }
 
     fun disableSecureFlag() {
