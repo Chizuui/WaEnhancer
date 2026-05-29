@@ -268,6 +268,32 @@ class FeatureLoader {
             DesignUtils.setPrefs(pref)
             Utils.init(loader)
 
+            // Hook to bypass/suppress EPERM exceptions during close of files/file descriptors
+            try {
+                XposedHelpers.findAndHookMethod(
+                    "libcore.io.IoBridge",
+                    null,
+                    "closeAndSignalBlockedThreads",
+                    java.io.FileDescriptor::class.java,
+                    object : XC_MethodHook() {
+                        override fun afterHookedMethod(param: MethodHookParam) {
+                            val throwable = param.throwable
+                            if (throwable is java.io.IOException) {
+                                val message = throwable.message
+                                if (message != null && (message.contains("EPERM") || message.contains("Operation not permitted"))) {
+                                    XposedBridge.log("WaEnhancer: Suppressed EPERM IOException during close")
+                                    param.throwable = null
+                                }
+                            }
+                        }
+                    }
+                )
+                XposedBridge.log("WaEnhancer: Successfully hooked IoBridge.closeAndSignalBlockedThreads to prevent EPERM crashes")
+            } catch (t: Throwable) {
+                XposedBridge.log("WaEnhancer: Failed to hook IoBridge.closeAndSignalBlockedThreads: " + t.message)
+            }
+
+
             WppCore.addListenerActivity(object : WppCore.ActivityChangeState {
                 override fun onChange(
                     activity: Activity,
