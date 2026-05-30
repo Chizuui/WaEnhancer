@@ -293,6 +293,35 @@ class FeatureLoader {
                 XposedBridge.log("WaEnhancer: Failed to hook IoBridge.closeAndSignalBlockedThreads: " + t.message)
             }
 
+            val classesToHookClose = arrayOf(
+                java.io.FileOutputStream::class.java,
+                java.io.FileInputStream::class.java,
+                java.io.RandomAccessFile::class.java
+            )
+            for (cls in classesToHookClose) {
+                try {
+                    XposedHelpers.findAndHookMethod(
+                        cls,
+                        "close",
+                        object : XC_MethodHook() {
+                            override fun afterHookedMethod(param: MethodHookParam) {
+                                val throwable = param.throwable
+                                if (throwable is java.io.IOException) {
+                                    val message = throwable.message
+                                    if (message != null && (message.contains("EPERM") || message.contains("Operation not permitted"))) {
+                                        XposedBridge.log("WaEnhancer: Suppressed EPERM IOException during ${cls.simpleName}.close()")
+                                        param.throwable = null
+                                    }
+                                }
+                            }
+                        }
+                    )
+                    XposedBridge.log("WaEnhancer: Successfully hooked ${cls.simpleName}.close() to prevent EPERM crashes")
+                } catch (t: Throwable) {
+                    XposedBridge.log("WaEnhancer: Failed to hook ${cls.simpleName}.close(): " + t.message)
+                }
+            }
+
 
             WppCore.addListenerActivity(object : WppCore.ActivityChangeState {
                 override fun onChange(
