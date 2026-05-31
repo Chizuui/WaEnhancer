@@ -55,25 +55,26 @@ public class PinnedLimit extends Feature {
             });
         }
 
-        // Fix bug in initialCapacity of LinkedHashSet
-        XposedHelpers.findAndHookConstructor(LinkedHashSet.class, int.class, new XC_MethodHook() {
+        // Fix bug in initialCapacity of collections caused by negative size() return value
+        var capacityFixHook = new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                if ((int) param.args[0] < 0) {
-                    param.args[0] = Math.abs((int) param.args[0]);
+                if (param.args.length > 0 && param.args[0] instanceof Integer) {
+                    int cap = (int) param.args[0];
+                    if (cap < 0) {
+                        param.args[0] = Math.abs(cap);
+                    }
                 }
             }
-        });
+        };
 
-        // Fix bug in initialCapacity of ArrayList
-        XposedHelpers.findAndHookConstructor(ArrayList.class, int.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                if ((int) param.args[0] < 0) {
-                    param.args[0] = Math.abs((int) param.args[0]);
-                }
-            }
-        });
+        XposedHelpers.findAndHookConstructor(LinkedHashSet.class, int.class, capacityFixHook);
+        XposedHelpers.findAndHookConstructor(LinkedHashSet.class, int.class, float.class, capacityFixHook);
+        XposedHelpers.findAndHookConstructor(ArrayList.class, int.class, capacityFixHook);
+        XposedHelpers.findAndHookConstructor(java.util.HashMap.class, int.class, capacityFixHook);
+        XposedHelpers.findAndHookConstructor(java.util.HashMap.class, int.class, float.class, capacityFixHook);
+        XposedHelpers.findAndHookConstructor(java.util.HashSet.class, int.class, capacityFixHook);
+        XposedHelpers.findAndHookConstructor(java.util.HashSet.class, int.class, float.class, capacityFixHook);
 
         // This creates a modified linkedhashMap to return 0 if the fixed list is less than 60.
         XposedBridge.hookMethod(pinnedHashSetMethod, new XC_MethodHook() {
