@@ -12,6 +12,7 @@ import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XSharedPreferences
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
+import com.wmods.wppenhacer.xposed.utils.Utils
 import org.json.JSONObject
 import org.luckypray.dexkit.query.enums.StringMatchType
 
@@ -23,9 +24,9 @@ class HideSeen(loader: ClassLoader, preferences: XSharedPreferences) :
 
         @JvmStatic
         fun generateFMessageKey(protocolTreeNodeWpp: ProtocolTreeNodeWpp): FMessageWpp.Key? {
-            val fromKV = protocolTreeNodeWpp.attributes.first { it.key == "to" }
+            val fromKV = protocolTreeNodeWpp.attributes.firstOrNull { it.key == "to" } ?: return null
             val userJid = fromKV.userJid ?: return null
-            val idKV = protocolTreeNodeWpp.attributes.first { it.key == "id" }
+            val idKV = protocolTreeNodeWpp.attributes.firstOrNull { it.key == "id" } ?: return null
             return FMessageWpp.Key(idKV.value!!, userJid, false)
         }
     }
@@ -178,6 +179,7 @@ class HideSeen(loader: ClassLoader, preferences: XSharedPreferences) :
                 }
 
                 val fmessageKey = generateFMessageKey(protocolTreeNodeWpp) ?: return
+                if (isMeJid(fmessageKey.remoteJid)) return
 
                 val hideSeenItem = MessageHistoryStore.getInstance().getHideSeenMessage(
                     fmessageKey.remoteJid.phoneRawString,
@@ -223,6 +225,17 @@ class HideSeen(loader: ClassLoader, preferences: XSharedPreferences) :
                 }
             }
         })
+    }
+
+    private fun isMeJid(remoteJid: FMessageWpp.UserJid): Boolean {
+        if (remoteJid.isNull) return true
+        val phone = remoteJid.phoneNumber
+        val raw = remoteJid.userRawString ?: ""
+        val phoneRaw = remoteJid.phoneRawString ?: ""
+        return phone.isNullOrEmpty() || 
+               phone == Utils.getMyNumber() || 
+               raw.contains("me") || 
+               phoneRaw.contains("me")
     }
 
     private fun checkPrivacyAndHideReceipt(fmessageKey: FMessageWpp.Key): Boolean {
