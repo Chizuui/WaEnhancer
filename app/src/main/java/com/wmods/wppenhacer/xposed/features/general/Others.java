@@ -748,7 +748,16 @@ public class Others extends Feature {
                 var menu = (Menu) param.args[0];
                 var item = menu.findItem(Utils.getID("menuitem_search", "id"));
                 if (item != null) {
-                    item.setVisible(Objects.equals(filterChats, "1"));
+                    int currentPage = 0;
+                    if (curPageField.getType() == int.class) {
+                        currentPage = curPageField.getInt(param.thisObject);
+                    }
+                    if (Objects.equals(filterChats, "2")) {
+                        // Hide search icon only on the Chat tab (page 1) where Search Bar is shown
+                        item.setVisible(currentPage != 1);
+                    } else {
+                        item.setVisible(Objects.equals(filterChats, "1"));
+                    }
                 }
             }
         });
