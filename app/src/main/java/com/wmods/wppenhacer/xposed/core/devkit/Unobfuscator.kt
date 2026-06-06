@@ -639,15 +639,59 @@ object Unobfuscator {
     @JvmStatic
     fun loadTimeToSecondsMethod(classLoader: ClassLoader): Method {
         return UnobfuscatorCache.getInstance().getMethod(classLoader) {
-            bridge.findMethod {
-                matcher {
-                    usingNumbers(223, 224)
-                    modifiers = Modifier.STATIC
-                    returnType = "java.lang.String"
-                    paramCount = 2
-                    paramTypes(null, "java.util.Calendar")
+            // Try original query: usingNumbers(223, 224) and parameter Calendar
+            try {
+                val result = bridge.findMethod {
+                    matcher {
+                        usingNumbers(223, 224)
+                        modifiers = Modifier.STATIC
+                        returnType = "java.lang.String"
+                        paramCount = 2
+                        paramTypes(null, "java.util.Calendar")
+                    }
+                }.singleOrNull()
+                if (result != null) return@getMethod result.getMethodInstance(classLoader)
+            } catch (ignored: Exception) {}
+
+            // Fallback 1: Match static method returning String, taking 2 parameters, invoking setTimeInMillis
+            try {
+                val setTimeInMillis = Calendar::class.java.getDeclaredMethod("setTimeInMillis", Long::class.javaPrimitiveType)
+                val results = bridge.findMethod {
+                    matcher {
+                        addInvoke(DexSignUtil.getMethodDescriptor(setTimeInMillis))
+                        modifiers = Modifier.STATIC
+                        returnType = "java.lang.String"
+                        paramCount = 2
+                        paramTypes(null, "long")
+                    }
                 }
-            }.single().getMethodInstance(classLoader)
+                if (results.isNotEmpty()) {
+                    return@getMethod results[0].getMethodInstance(classLoader)
+                }
+            } catch (ignored: Exception) {}
+
+            // Fallback 2: Match static method returning String, taking 3 parameters, invoking setTimeInMillis
+            try {
+                val setTimeInMillis = Calendar::class.java.getDeclaredMethod("setTimeInMillis", Long::class.javaPrimitiveType)
+                val results = bridge.findMethod {
+                    matcher {
+                        addInvoke(DexSignUtil.getMethodDescriptor(setTimeInMillis))
+                        modifiers = Modifier.STATIC
+                        returnType = "java.lang.String"
+                        paramCount = 3
+                    }
+                }
+                for (m in results) {
+                    val paramTypes = m.getMethodInstance(classLoader).parameterTypes
+                    for (type in paramTypes) {
+                        if (type == Long::class.javaPrimitiveType) {
+                            return@getMethod m.getMethodInstance(classLoader)
+                        }
+                    }
+                }
+            } catch (ignored: Exception) {}
+
+            throw Exception("TimeToSeconds method not found")
         }
     }
 
