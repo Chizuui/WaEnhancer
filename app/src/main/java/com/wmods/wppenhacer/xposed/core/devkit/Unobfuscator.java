@@ -605,18 +605,49 @@ public class Unobfuscator {
     public synchronized static Method loadTimeToSecondsMethod(ClassLoader classLoader) throws Exception {
         return UnobfuscatorCache.getInstance().getMethod(classLoader, () -> {
             Method setTimeInMillis = Calendar.class.getDeclaredMethod("setTimeInMillis", long.class);
-            Method getInstance = Calendar.class.getDeclaredMethod("getInstance", Locale.class);
+            Method getInstance = null;
+            try {
+                getInstance = Calendar.class.getDeclaredMethod("getInstance", Locale.class);
+            } catch (Exception ignored) {}
 
-            var result = getDexKit().findMethod(FindMethod.create().matcher(MethodMatcher.create()
+            if (getInstance != null) {
+                var result = getDexKit().findMethod(FindMethod.create().matcher(MethodMatcher.create()
+                        .addInvoke(DexSignUtil.getMethodDescriptor(setTimeInMillis))
+                        .addInvoke(DexSignUtil.getMethodDescriptor(getInstance))
+                        .modifiers(Modifier.STATIC)
+                        .returnType(String.class).paramCount(2)
+                        .paramTypes(null, long.class)
+                )).singleOrNull();
+                if (result != null) return result.getMethodInstance(classLoader);
+            }
+
+            // Fallback 1: Match static method returning String, taking 2 parameters (with second parameter being long), and invoking setTimeInMillis
+            var results1 = getDexKit().findMethod(FindMethod.create().matcher(MethodMatcher.create()
                     .addInvoke(DexSignUtil.getMethodDescriptor(setTimeInMillis))
-                    .addInvoke(DexSignUtil.getMethodDescriptor(getInstance))
                     .modifiers(Modifier.STATIC)
                     .returnType(String.class).paramCount(2)
                     .paramTypes(null, long.class)
+            ));
+            if (!results1.isEmpty()) {
+                return results1.get(0).getMethodInstance(classLoader);
+            }
 
-            )).singleOrNull();
-            if (result == null) throw new Exception("TimeToSeconds method not found");
-            return result.getMethodInstance(classLoader);
+            // Fallback 2: Match static method returning String, taking 3 parameters, and invoking setTimeInMillis
+            var results2 = getDexKit().findMethod(FindMethod.create().matcher(MethodMatcher.create()
+                    .addInvoke(DexSignUtil.getMethodDescriptor(setTimeInMillis))
+                    .modifiers(Modifier.STATIC)
+                    .returnType(String.class).paramCount(3)
+            ));
+            for (var m : results2) {
+                var paramTypes = m.getMethodInstance(classLoader).getParameterTypes();
+                for (var type : paramTypes) {
+                    if (type == long.class) {
+                        return m.getMethodInstance(classLoader);
+                    }
+                }
+            }
+
+            throw new Exception("TimeToSeconds method not found");
         });
     }
 
