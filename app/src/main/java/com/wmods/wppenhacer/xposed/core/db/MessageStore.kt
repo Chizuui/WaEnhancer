@@ -12,20 +12,38 @@ import java.util.stream.Collectors
 
 class MessageStore private constructor() {
 
-    private var sqLiteDatabase: SQLiteDatabase? = null
-
-    init {
-        val dbFile = File(Utils.getApplication().filesDir.parentFile, "/databases/msgstore.db")
-        if (dbFile.exists()) {
-            sqLiteDatabase = SQLiteDatabase.openDatabase(
-                dbFile.absolutePath,
-                null,
-                SQLiteDatabase.OPEN_READWRITE
-            )
+    private val sqLiteDatabase: SQLiteDatabase?
+        get() {
+            if (whatsappDatabase != null && whatsappDatabase!!.isOpen) {
+                return whatsappDatabase
+            }
+            if (mSqLiteDatabase == null || !mSqLiteDatabase!!.isOpen) {
+                val dbFile = File(Utils.getApplication().filesDir.parentFile, "/databases/msgstore.db")
+                if (dbFile.exists()) {
+                    try {
+                        mSqLiteDatabase = SQLiteDatabase.openDatabase(
+                            dbFile.absolutePath,
+                            null,
+                            SQLiteDatabase.OPEN_READWRITE
+                        ).apply {
+                            enableWriteAheadLogging()
+                            execSQL("PRAGMA busy_timeout = 5000;")
+                        }
+                    } catch (e: Exception) {
+                        XposedBridge.log("WaEnhancer: Failed to open msgstore database: ${e.message}")
+                    }
+                }
+            }
+            return mSqLiteDatabase
         }
-    }
+
+    private var mSqLiteDatabase: SQLiteDatabase? = null
 
     companion object {
+        @JvmStatic
+        @Volatile
+        var whatsappDatabase: SQLiteDatabase? = null
+
         @Volatile
         private var mInstance: MessageStore? = null
 

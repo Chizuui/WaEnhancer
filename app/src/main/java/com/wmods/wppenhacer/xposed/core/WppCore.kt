@@ -51,6 +51,10 @@ object WppCore {
     private var mWaDatabase: SQLiteDatabase? = null
 
     @JvmField
+    @Volatile
+    var whatsappWaDatabase: SQLiteDatabase? = null
+
+    @JvmField
     var client: BaseClient? = null
 
     private var mCachedMessageStore: Any? = null
@@ -301,11 +305,18 @@ object WppCore {
         val dataDir = Utils.getApplication().filesDir.parentFile
         val database = File(dataDir, "databases/wa.db")
         if (database.exists()) {
-            mWaDatabase = SQLiteDatabase.openDatabase(
-                database.absolutePath,
-                null,
-                SQLiteDatabase.OPEN_READONLY
-            )
+            try {
+                mWaDatabase = SQLiteDatabase.openDatabase(
+                    database.absolutePath,
+                    null,
+                    SQLiteDatabase.OPEN_READONLY
+                ).apply {
+                    enableWriteAheadLogging()
+                    execSQL("PRAGMA busy_timeout = 5000;")
+                }
+            } catch (e: Exception) {
+                XposedBridge.log("WaEnhancer: Failed to open wa database: ${e.message}")
+            }
         }
     }
 
@@ -688,6 +699,9 @@ object WppCore {
 
     @JvmStatic
     fun getWaDatabase(): SQLiteDatabase? {
+        if (whatsappWaDatabase != null && whatsappWaDatabase!!.isOpen) {
+            return whatsappWaDatabase
+        }
         loadWADatabase()
         return mWaDatabase
     }

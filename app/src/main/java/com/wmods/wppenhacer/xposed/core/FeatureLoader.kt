@@ -131,6 +131,25 @@ class FeatureLoader {
             Utils.xprefs = pref
             Utils.appClassLoader = loader
 
+            try {
+                val openDatabaseHook = object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val path = param.args[0] as? String ?: return
+                        val db = param.result as? android.database.sqlite.SQLiteDatabase ?: return
+                        if (path.endsWith("msgstore.db")) {
+                            com.wmods.wppenhacer.xposed.core.db.MessageStore.whatsappDatabase = db
+                            XposedBridge.log("WaEnhancer: Captured WhatsApp's msgstore.db database connection")
+                        } else if (path.endsWith("wa.db")) {
+                            com.wmods.wppenhacer.xposed.core.WppCore.whatsappWaDatabase = db
+                            XposedBridge.log("WaEnhancer: Captured WhatsApp's wa.db database connection")
+                        }
+                    }
+                }
+                XposedBridge.hookAllMethods(android.database.sqlite.SQLiteDatabase::class.java, "openDatabase", openDatabaseHook)
+            } catch (t: Throwable) {
+                XposedBridge.log("WaEnhancer: Failed to hook SQLiteDatabase.openDatabase: " + t.message)
+            }
+
             XposedHelpers.findAndHookMethod(
                 Instrumentation::class.java, "callApplicationOnCreate", Application::class.java,
                 object : XC_MethodHook() {
