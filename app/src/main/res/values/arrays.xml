@@ -164,6 +164,7 @@
         <item>2.26.21.xx</item>
         <item>2.26.22.xx</item>
         <item>2.26.23.xx</item>
+        <item>2.26.24.xx</item>
     </string-array>
     <string-array name="supported_versions_business">
         <item>2.26.14.xx</item>
@@ -176,6 +177,7 @@
         <item>2.26.21.xx</item>
         <item>2.26.22.xx</item>
         <item>2.26.23.xx</item>
+        <item>2.26.24.xx</item>
     </string-array>
     <string-array name="image_picker">
         <item>image/*</item>
