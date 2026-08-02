@@ -304,7 +304,7 @@ object Unobfuscator {
             val methodData = bridge.getMethodData(loadReceiptMainCallerMethod(classLoader))
             val methods = ArrayList<Method>()
             for (methodCaller in methodData!!.callers) {
-                if (methodCaller.paramCount > 1 && methodCaller.paramTypes[0].simpleName == "Message") {
+                if (methodCaller.paramCount >= 1 && methodCaller.paramTypes[0].name == "android.os.Message") {
                     methods.add(methodCaller.getMethodInstance(classLoader))
                 }
             }
