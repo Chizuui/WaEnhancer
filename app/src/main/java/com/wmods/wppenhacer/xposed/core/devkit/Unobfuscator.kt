@@ -2114,8 +2114,12 @@ object Unobfuscator {
 
             val methodData = bridge.findMethod {
                 matcher {
+                    paramCount(2)
+                    paramTypes(Int::class.java, Float::class.java)
+                }
+            }.firstOrNull { it.name.contains("Speed") } ?: bridge.findMethod {
+                matcher {
                     addUsingString("setPlaybackSpeed", StringMatchType.Equals)
-                    addUsingString("newSpeed")
                 }
             }.singleOrNull() ?: throw RuntimeException("PlaybackSpeed method not found")
             methodData.getMethodInstance(classLoader)
