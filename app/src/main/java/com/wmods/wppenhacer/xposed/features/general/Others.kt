@@ -41,9 +41,7 @@ import org.luckypray.dexkit.util.DexSignUtil
 import java.io.File
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
-import java.util.Collections
 import java.util.Properties
-import java.util.WeakHashMap
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
@@ -52,6 +50,8 @@ class Others(loader: ClassLoader, preferences:SharedPreferences) : Feature(loade
 
     companion object {
 
+        private const val HOME_FILTER_HIDDEN_FIELD = "wae_home_filter_hidden"
+
         @JvmField
         val propsBoolean = ConcurrentHashMap<Int, Boolean>()
         @JvmField
@@ -59,8 +59,6 @@ class Others(loader: ClassLoader, preferences:SharedPreferences) : Feature(loade
     }
 
     private lateinit var properties: Properties
-    private val hiddenHomeFilterViews =
-        Collections.synchronizedMap(WeakHashMap<View, Boolean>())
 
     override fun doHook() {
         properties = Utils.getProperties(prefs, "custom_css", "custom_filters")
@@ -305,7 +303,11 @@ class Others(loader: ClassLoader, preferences:SharedPreferences) : Feature(loade
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val visibility = param.args[0] as Int
                     if (visibility == View.GONE) return
-                    if (hiddenHomeFilterViews.containsKey(param.thisObject as View)) {
+                    if (XposedHelpers.getAdditionalInstanceField(
+                            param.thisObject,
+                            HOME_FILTER_HIDDEN_FIELD
+                        ) == true
+                    ) {
                         param.args[0] = View.GONE
                     }
                 }
@@ -314,7 +316,7 @@ class Others(loader: ClassLoader, preferences:SharedPreferences) : Feature(loade
         XposedBridge.hookAllConstructors(filterView, object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
                 val view = param.thisObject as View
-                hiddenHomeFilterViews[view] = true
+                XposedHelpers.setAdditionalInstanceField(view, HOME_FILTER_HIDDEN_FIELD, true)
                 if (view.visibility != View.GONE) view.visibility = View.GONE
             }
         })

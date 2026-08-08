@@ -182,7 +182,6 @@ class MessageStore private constructor() {
 
     fun storeMessageRead(messageId: String) {
         val db = sqLiteDatabase ?: return
-        XposedBridge.log("storeMessageRead: $messageId")
         try {
             db.execSQL("UPDATE message SET status = 1 WHERE key_id = \"$messageId\"")
         } catch (e: Exception) {

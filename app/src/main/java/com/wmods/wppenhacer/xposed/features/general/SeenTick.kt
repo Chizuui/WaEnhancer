@@ -8,6 +8,7 @@ import android.graphics.PorterDuff
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.util.LruCache
 import android.util.Pair
 import android.view.Gravity
 import android.view.Menu
@@ -46,14 +47,16 @@ import java.lang.ref.WeakReference
 import java.lang.reflect.Constructor
 import java.lang.reflect.Field
 import java.lang.reflect.Method
-import java.util.concurrent.ConcurrentHashMap
 
 class SeenTick(
     loader: ClassLoader,
     preferences:SharedPreferences
 ) : Feature(loader, preferences) {
 
-    private val messageMap = ConcurrentHashMap<String, WeakReference<ImageView>>()
+    // Bounded cache: a plain map keyed by message id would grow forever.
+    // The WeakReference values keep dead views collectable; the LRU cap keeps
+    // the message-id keys from accumulating.
+    private val messageMap = LruCache<String, WeakReference<ImageView>>(512)
     val scope = CoroutineScope(Dispatchers.Default + SupervisorJob() + WaeCoroutineExceptionHandler)
 
     companion object {
@@ -128,11 +131,19 @@ class SeenTick(
 
     private fun registerMessageView(messageId: String?, view: ImageView?) {
         if (messageId == null || view == null) return
-        messageMap[messageId] = WeakReference(view)
+        synchronized(messageMap) {
+            messageMap.put(messageId, WeakReference(view))
+        }
     }
 
     private fun getRegisteredView(messageId: String?): ImageView? {
-        return messageMap[messageId]?.get()
+        if (messageId == null) return null
+        synchronized(messageMap) {
+            val ref = messageMap.get(messageId) ?: return null
+            val view = ref.get()
+            if (view == null) messageMap.remove(messageId)
+            return view
+        }
     }
 
     override fun doHook() {

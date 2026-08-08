@@ -32,6 +32,7 @@ import java.io.FileOutputStream
 import java.io.InputStream
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.LinkedHashMap
 import java.util.Locale
 import java.util.Properties
 import java.util.Random
@@ -41,7 +42,14 @@ import java.util.regex.Pattern
 
 object Utils {
     lateinit var xprefs: SharedPreferences
-    private val ids = HashMap<String?, Int?>()
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+
+    // Bounded LRU cache for resource IDs (was an unbounded HashMap)
+    private val ids = object : LinkedHashMap<String, Int>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Int>?): Boolean {
+            return size > 256
+        }
+    }
     lateinit var appClassLoader: ClassLoader
 
     fun init() {
@@ -105,10 +113,7 @@ object Utils {
         val key = type + "_" + name
 
         synchronized(ids) {
-            if (ids.containsKey(key)) {
-                val cachedId = ids[key]
-                return cachedId ?: -1
-            }
+            ids[key]?.let { return it }
         }
 
         try {
@@ -117,7 +122,7 @@ object Utils {
             val id = context.resources.getIdentifier(name, type, app.packageName)
 
             synchronized(ids) {
-                ids.put(key, id)
+                ids[key] = id
             }
 
             return id
@@ -205,7 +210,7 @@ object Utils {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             Toast.makeText(application, message, length).show()
         } else {
-            Handler(Looper.getMainLooper()).post {
+            mainHandler.post {
                 Toast.makeText(
                     application,
                     message,

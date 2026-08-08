@@ -51,12 +51,13 @@ class CallRecording(
     private val currentUserJid = AtomicReference<FMessageWpp.UserJid?>()
     private val delayedStartFuture = AtomicReference<ScheduledFuture<*>?>()
 
-    private val delayedStartScheduler: ScheduledExecutorService =
+    private val delayedStartScheduler: ScheduledExecutorService by lazy {
         Executors.newSingleThreadScheduledExecutor { runnable ->
             Thread(runnable, "WaEnhancer-CallDelayedStart").apply {
                 isDaemon = true
             }
         }
+    }
 
     @Throws(Throwable::class)
     override fun doHook() {

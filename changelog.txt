@@ -2,4 +2,13 @@
 * Attempt to fix the bug in the floating bottom bar
 * Fixed problem that causes WhatsApp to crash when opening the chat screen
 * Fixed problem when hiding META AI
+* Fixed memory leak of the current Activity reference in the lifecycle tracker
+* Fixed unbounded growth of the seen-tick message cache and resource-ID cache
+
+[IMPROVED]
+* Major performance improvements in hot render paths: Paint.setColor and AssetManager.getResourceValue color hooks are now allocation-free with pre-compiled int color maps
+* Skip all SharedPreferences hook overhead when no preference overrides are active
+* Disabled verbose logging by default for smoother performance
+* Optimized the View.setVisibility hook used by home filters to avoid synchronized map lookups
+* Reduced stack-trace scans in the Conversation screen color exception path from two walks to one
 

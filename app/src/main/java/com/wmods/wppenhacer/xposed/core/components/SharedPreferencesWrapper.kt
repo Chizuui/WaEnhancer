@@ -3,6 +3,7 @@ package com.wmods.wppenhacer.xposed.core.components
 import android.content.SharedPreferences
 import android.content.SharedPreferences.OnSharedPreferenceChangeListener
 import com.wmods.wppenhacer.xposed.core.devkit.Unobfuscator.loadSharedPreferencesClasses
+import com.wmods.wppenhacer.xposed.utils.Utils
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
@@ -71,6 +72,10 @@ class SharedPreferencesWrapper(private val mPreferences: SharedPreferences) : Sh
     companion object {
         private val prefHook = CopyOnWriteArraySet<SPrefHook>()
 
+        @Volatile
+        private var methodHooksInstalled = false
+        private val methodHookLock = Any()
+
         @Throws(Exception::class)
         fun hookInit(classLoader: ClassLoader) {
             XposedHelpers.findAndHookMethod(
@@ -82,11 +87,16 @@ class SharedPreferencesWrapper(private val mPreferences: SharedPreferences) : Sh
                 object : XC_MethodHook() {
                     @Throws(Throwable::class)
                     override fun afterHookedMethod(param: MethodHookParam) {
-                        val pref = param.result as SharedPreferences?
-                        if (pref == null || pref is SharedPreferencesWrapper) return
+                        // Fast path: no hooks registered -> don't wrap, zero overhead
+                        if (prefHook.isEmpty()) return
+                        val pref = param.result as? SharedPreferences ?: return
+                        if (pref is SharedPreferencesWrapper) return
                         param.setResult(SharedPreferencesWrapper(pref))
                     }
                 })
+        }
+
+        private fun installMethodHooks(classLoader: ClassLoader) {
             val sharedPreferencesClasses =
                 loadSharedPreferencesClasses(classLoader)
             if (sharedPreferencesClasses.isNullOrEmpty()) return
@@ -174,6 +184,21 @@ class SharedPreferencesWrapper(private val mPreferences: SharedPreferences) : Sh
 
         fun addHook(hook: SPrefHook?) {
             prefHook.add(hook!!)
+            // Defer installing the per-method hooks until the first hook is
+            // actually registered. For users without those features, WhatsApp's
+            // SharedPreferences reads never pay the Xposed dispatch cost.
+            if (!methodHooksInstalled) {
+                synchronized(methodHookLock) {
+                    if (!methodHooksInstalled) {
+                        try {
+                            installMethodHooks(Utils.appClassLoader)
+                        } catch (e: Throwable) {
+                            XposedBridge.log(e)
+                        }
+                        methodHooksInstalled = true
+                    }
+                }
+            }
         }
 
         private fun applyHook(key: String?, value: Any?): Any? {

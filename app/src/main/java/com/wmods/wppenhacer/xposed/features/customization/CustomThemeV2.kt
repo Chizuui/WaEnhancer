@@ -25,7 +25,6 @@ import com.wmods.wppenhacer.xposed.core.Feature
 import com.wmods.wppenhacer.xposed.core.WppCore
 import com.wmods.wppenhacer.xposed.core.devkit.Unobfuscator
 import com.wmods.wppenhacer.xposed.utils.DesignUtils
-import com.wmods.wppenhacer.xposed.utils.ReflectionUtils
 import com.wmods.wppenhacer.xposed.utils.Utils
 import de.robv.android.xposed.XC_MethodHook
 import android.content.SharedPreferences 
@@ -34,7 +33,6 @@ import de.robv.android.xposed.XposedHelpers
 import java.util.Properties
 import java.util.Collections
 import java.util.WeakHashMap
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.roundToInt
 
 class CustomThemeV2(loader: ClassLoader, preferences:SharedPreferences) :
@@ -42,6 +40,10 @@ class CustomThemeV2(loader: ClassLoader, preferences:SharedPreferences) :
 
     companion object {
         private const val FIELD_WALLPAPER_TOOLBAR = "wae_wallpaper_toolbar"
+
+        // In the Conversation activity this specific color must always be replaced,
+        // even when the getValue/android.view exception applies to other colors.
+        private const val CONVERSATION_ALWAYS_APPLY_COLOR = 0xff12181c.toInt()
 
         @JvmStatic
         private fun processColors(color: String, mapColors: HashMap<String, String>) {
@@ -106,16 +108,34 @@ class CustomThemeV2(loader: ClassLoader, preferences:SharedPreferences) :
     private var navAlpha: HashMap<String, String>? = null
     private var toolbarAlpha: HashMap<String, String>? = null
     private var properties: Properties? = null
-    private val resolvedColors = ConcurrentHashMap<Int, Int>()
     private val processedResources = Collections.synchronizedMap(WeakHashMap<Any, Boolean>())
     @Volatile
     private var colorsReady = false
+
+    // Fast-path flag for the hot Paint.setColor hook. Updated only on activity
+    // lifecycle transitions (rare), read on every setColor call (very hot), so
+    // the hook never has to resolve the current activity class.
+    @Volatile
+    private var skipSetColorMapping = true
+
+    // Fast-path flag for the wallpaper hooks (hookFragmentView / FrameLayout.onMeasure).
+    // Mirrors checkNotHomeActivity(): wallpaper colors only apply while the current
+    // activity is the HomeActivity.
+    @Volatile
+    private var isHomeActivityCurrent = false
+
+    // Fast pre-compiled int->int color maps, rebuilt only when colors change.
+    // exactColorMap: keys stored as "#aarrggbb" (9 chars)
+    // rgbColorMap: keys stored as "rrggbb" (7 chars), alpha is preserved from source
+    private val exactColorMap = HashMap<Int, Int>()
+    private val rgbColorMap = HashMap<Int, Int>()
 
     @Throws(Throwable::class)
     override fun doHook() {
         properties = Utils.getProperties(prefs, "custom_css", "custom_filters")
         hookTheme()
         hookWallpaper()
+        trackActivityState()
         XposedBridge.hookAllMethods(
             XposedHelpers.findClass("android.app.ActivityThread", classLoader),
             "handleRelaunchActivity",
@@ -246,8 +266,11 @@ class CustomThemeV2(loader: ClassLoader, preferences:SharedPreferences) :
                     ) {
                         if (typedValue.data == 0) return
                         val originalColor = typedValue.data
-                        val mappedColor = IColors.getFromIntColor(originalColor, IColors.colors)
-                        if (mappedColor == originalColor || checkNotApplyColor(originalColor)) return
+                        val mappedColor = lookupColor(originalColor)
+                        // Fast path: color has no mapping -> nothing to do, skip the
+                        // expensive stack scan in checkNotApplyColor entirely.
+                        if (mappedColor == originalColor) return
+                        if (checkNotApplyColor(originalColor)) return
                         typedValue.data = mappedColor
                     }
                 }
@@ -276,7 +299,7 @@ class CustomThemeV2(loader: ClassLoader, preferences:SharedPreferences) :
                     val mColors =
                         XposedHelpers.getObjectField(colorStateList, "mColors") as IntArray
                     for (i in mColors.indices) {
-                        mColors[i] = IColors.getFromIntColor(mColors[i], IColors.colors)
+                        mColors[i] = lookupColor(mColors[i])
                     }
                 }
             })
@@ -286,7 +309,6 @@ class CustomThemeV2(loader: ClassLoader, preferences:SharedPreferences) :
 
     fun loadAndApplyColors() {
         colorsReady = false
-        resolvedColors.clear()
         processedResources.clear()
         IColors.initColors()
 
@@ -373,7 +395,46 @@ class CustomThemeV2(loader: ClassLoader, preferences:SharedPreferences) :
             IColors.backgroundColors["#ffffffff"] = "#ffffffff"
             IColors.backgroundColors["ffffff"] = "ffffff"
         }
+        rebuildColorMaps()
         colorsReady = true
+    }
+
+    /**
+     * Pre-compiles [IColors.colors] into plain int maps so the hot hooks
+     * (Paint.setColor / getResourceValue / loadColorStateList) never allocate
+     * Strings nor parse colors at render time.
+     */
+    private fun rebuildColorMaps() {
+        exactColorMap.clear()
+        rgbColorMap.clear()
+        for ((key, value) in IColors.colors) {
+            try {
+                when (key.length) {
+                    9 -> {
+                        if (value.length != 9) continue
+                        val keyInt = IColors.parseColor(key)
+                        val valueInt = IColors.parseColor(value)
+                        if (keyInt != valueInt) exactColorMap[keyInt] = valueInt
+                    }
+                    7 -> {
+                        if (value.length != 7) continue
+                        val keyRgb = key.substring(1).toInt(16)
+                        val valueRgb = value.substring(1).toInt(16)
+                        if (keyRgb != valueRgb) rgbColorMap[keyRgb] = valueRgb
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * Equivalent to [IColors.getFromIntColor] on [IColors.colors], but allocation-free.
+     */
+    private fun lookupColor(color: Int): Int {
+        exactColorMap[color]?.let { return it }
+        val mappedRgb = rgbColorMap[color and 0x00ffffff] ?: return color
+        return (color and 0xff000000.toInt()) or mappedRgb
     }
 
     @SuppressLint("DiscouragedApi")
@@ -444,38 +505,80 @@ class CustomThemeV2(loader: ClassLoader, preferences:SharedPreferences) :
     }
 
     private fun checkNotHomeActivity(): Boolean {
-        val homeClass = WppCore.homeActivityClass
-        val currentActivity = WppCore.getCurrentActivity()
-        return (currentActivity == null || !homeClass.isInstance(currentActivity))
+        return !isHomeActivityCurrent
     }
 
     private fun checkNotApplyColor(color: Int): Boolean {
+        // This specific color must always be replaced; no stack scan needed.
+        if (color == CONVERSATION_ALWAYS_APPLY_COLOR) return false
+
         val activity = WppCore.getCurrentActivity()
-        if (activity != null && activity.javaClass.simpleName == "Conversation"
-            && ReflectionUtils.isCalledFromStrings("getValue")
-            && !ReflectionUtils.isCalledFromStrings("android.view")
-        ) {
-            return color != 0xff12181c.toInt()
+        if (activity == null || activity.javaClass.simpleName != "Conversation") return false
+
+        // Single stack walk replacing the previous two isCalledFromStrings() calls
+        // (each allocated a Throwable). Identical result: a "getValue" frame exists
+        // AND no "android.view" frame exists within the first 20 frames.
+        val trace = Throwable().stackTrace
+        val limit = minOf(trace.size, 20)
+        var hasGetValue = false
+        for (i in 2 until limit) {
+            val frame = trace[i]
+            if (frame.className.contains("android.view") || frame.methodName.contains("android.view")) {
+                return false
+            }
+            if (frame.className.contains("getValue") || frame.methodName.contains("getValue")) {
+                hasGetValue = true
+            }
         }
-        return false
+        return hasGetValue
     }
 
     override fun getPluginName(): String {
         return "Custom Theme V2"
     }
 
+    /**
+     * Keeps [skipSetColorMapping] / [wallpaperApplies] in sync with WppCore's
+     * current-activity tracking so the hot hooks (Paint.setColor, wallpaper
+     * fragment/measure) never pay for getCurrentActivity() + class resolution.
+     *
+     * Mirrors the previous per-call checks exactly: setColor is skipped when
+     * there is no current activity or it is Conversation; wallpaper colors only
+     * apply while the current activity is the HomeActivity.
+     */
+    private fun trackActivityState() {
+        // Only resolve the (lazy) home activity class when the wallpaper hooks
+        // are actually installed (hookWallpaper gates on this same pref).
+        val wallpaperHooksActive = prefs.getBoolean("wallpaper", false)
+        WppCore.addListenerActivity { activity, type ->
+            when (type) {
+                WppCore.ActivityChangeState.ChangeType.CREATED,
+                WppCore.ActivityChangeState.ChangeType.STARTED,
+                WppCore.ActivityChangeState.ChangeType.RESUMED -> {
+                    skipSetColorMapping = activity.javaClass.simpleName == "Conversation"
+                    if (wallpaperHooksActive) {
+                        isHomeActivityCurrent = WppCore.homeActivityClass.isInstance(activity)
+                    }
+                }
+                WppCore.ActivityChangeState.ChangeType.DESTROYED -> {
+                    // WaCallback clears WppCore.mCurrentActivity right after firing
+                    // this callback; the == null guard keeps this correct regardless
+                    // of that ordering.
+                    if (WppCore.mCurrentActivity === activity || WppCore.mCurrentActivity == null) {
+                        skipSetColorMapping = true
+                        isHomeActivityCurrent = false
+                    }
+                }
+                else -> Unit
+            }
+        }
+    }
+
     inner class IntBgColorHook : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) {
-            if (!colorsReady) return
-            val currentActivity = WppCore.getCurrentActivity()
-            if (currentActivity == null || currentActivity.javaClass.simpleName == "Conversation") return
+            if (!colorsReady || skipSetColorMapping) return
 
-            val color = param.args[0] as Int
-            val mappedColor = resolvedColors[color]
-                ?: IColors.getFromIntColor(color, IColors.colors).also {
-                    resolvedColors[color] = it
-                }
-            param.args[0] = mappedColor
+            param.args[0] = lookupColor(param.args[0] as Int)
         }
     }
 }
