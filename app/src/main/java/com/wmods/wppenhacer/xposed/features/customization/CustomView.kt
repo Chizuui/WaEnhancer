@@ -72,7 +72,14 @@ import kotlin.math.sin
 class CustomView(loader: ClassLoader, preferences:SharedPreferences) : Feature(loader, preferences) {
 
     private var cacheImages: DrawableCache? = null
-    private val chacheDrawables = HashMap<String, Drawable>()
+    // Bounded byte-based cache for parsed gradient drawables (was an unbounded
+    // HashMap). Gradients are full-size bitmaps, so bound by bytes, not count.
+    private val chacheDrawables = object : LruCache<String, Drawable>(48 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Drawable): Int {
+            val bitmap = (value as? BitmapDrawable)?.bitmap
+            return bitmap?.allocationByteCount?.coerceAtLeast(1) ?: 1
+        }
+    }
     private var properties: Properties? = null
     private val processedViews = WeakHashMap<View, Boolean>()
     private val forcedVisibilityMap = WeakHashMap<View, Int>()
@@ -881,12 +888,12 @@ class CustomView(loader: ClassLoader, preferences:SharedPreferences) : Feature(l
     private fun setBackgroundModel(view: View, term: SerialTerm) {
         if (term.type == SerialTerm.LINEAR_GRADIENT) {
             try {
-                var gradientDrawable = chacheDrawables[term.strValue]
+                var gradientDrawable = chacheDrawables.get(term.strValue)
                 if (gradientDrawable == null) {
                     gradientDrawable = GradientDrawableParser.parseGradient(
                         term.gradientAngle, term.gradientColors, term.gradientPositions,
                         view.width, view.height)
-                    chacheDrawables[term.strValue] = gradientDrawable
+                    chacheDrawables.put(term.strValue, gradientDrawable)
                 }
                 forcedBackgroundMap[view] = gradientDrawable
                 view.background = gradientDrawable

@@ -56,7 +56,6 @@ import java.io.InputStream
 import java.lang.reflect.InvocationTargetException
 import java.util.Locale
 import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -70,6 +69,25 @@ class MediaPreview(
     private var filePath: File? = null
     private var dialog: Dialog? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Guards against stale downloads (which are no longer cancelled on dismiss)
+    // mutating shared state used by a newer preview.
+    @Volatile
+    private var previewGeneration = 0L
+
+    // Reuse a single client across previews instead of building a new one
+    // (new connection/thread pools) on every download.
+    private val httpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                chain.proceed(
+                    chain.request().newBuilder()
+                        .addHeader("User-Agent", "Chrome/117.0.5938.150")
+                        .build()
+                )
+            }
+            .build()
+    }
 
     companion object {
         private const val MEDIA_PREVIEW_WRAPPER_TAG = "wpp_media_preview_wrapper"
@@ -239,7 +257,8 @@ class MediaPreview(
 
     @SuppressLint("SetTextI18n")
     private fun startPlayer(id: Long, context: Context, isNewsletter: Boolean) {
-        val executor: ExecutorService = Executors.newSingleThreadExecutor()
+        val generation = ++previewGeneration
+        val executor: ExecutorService = Utils.executor
         executor.execute {
             try {
                 val query = String.format(
@@ -262,7 +281,6 @@ class MediaPreview(
                             url = "https://mmg.whatsapp.net$directPath"
                         }
 
-                        val mainHandler = Handler(Looper.getMainLooper())
                         mainHandler.post {
                             dialog = Dialog(context, android.R.style.Theme_Black_NoTitleBar_Fullscreen).apply {
                                 requestWindowFeature(Window.FEATURE_NO_TITLE)
@@ -306,7 +324,7 @@ class MediaPreview(
                             val progressText = loadingContainer.getChildAt(1) as TextView
 
                             dialog?.setContentView(mainContainer)
-                            dialog?.setOnDismissListener { cleanupResources(executor) }
+                            dialog?.setOnDismissListener { cleanupResources(generation) }
                             dialog?.show()
 
                             val finalUrl = url
@@ -322,7 +340,7 @@ class MediaPreview(
                                     loadingContainer,
                                     progressBar,
                                     progressText,
-                                    executor
+                                    generation
                                 )
                             }
                         }
@@ -331,7 +349,7 @@ class MediaPreview(
             } catch (e: Exception) {
                 logDebug(e)
                 Utils.showToast(e.message, Toast.LENGTH_LONG)
-                cleanupDialog(executor)
+                cleanupDialog(generation)
             }
         }
     }
@@ -439,7 +457,7 @@ class MediaPreview(
         url: String, mediaKey: String, mimeType: String,
         expectedSize: Long, isNewsletter: Boolean, context: Context,
         contentContainer: FrameLayout, loadingContainer: LinearLayout,
-        progressBar: ProgressBar, progressText: TextView, executor: ExecutorService
+        progressBar: ProgressBar, progressText: TextView, generation: Long
     ) {
         try {
             val fileExtension = if (mimeType.startsWith("image")) ".jpg" else ".mp4"
@@ -455,18 +473,8 @@ class MediaPreview(
             }
             lastProgressPostAt = 0L
 
-            val client = OkHttpClient.Builder()
-                .addInterceptor { chain ->
-                    chain.proceed(
-                        chain.request().newBuilder()
-                            .addHeader("User-Agent", "Chrome/117.0.5938.150")
-                            .build()
-                    )
-                }
-                .build()
-
             val request = Request.Builder().url(url).build()
-            client.newCall(request).execute().use { response ->
+            httpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     throw Exception("Failed to download media")
                 }
@@ -477,7 +485,7 @@ class MediaPreview(
                 val inputStream = response.body.byteStream()
 
                 if (isNewsletter) {
-                    downloadWithProgress(inputStream, contentLength, progressBar, progressText)
+                    downloadWithProgress(inputStream, contentLength, progressBar, progressText, generation)
                 } else {
                     downloadAndDecryptWithProgress(
                         inputStream,
@@ -485,7 +493,8 @@ class MediaPreview(
                         mediaKey,
                         mimeType,
                         progressBar,
-                        progressText
+                        progressText,
+                        generation
                     )
                 }
 
@@ -496,6 +505,7 @@ class MediaPreview(
                 }
 
                 mainHandler.post {
+                    if (generation != previewGeneration) return@post
                     loadingContainer.visibility = View.GONE
 
                     if (mimeType.startsWith("image")) {
@@ -507,7 +517,7 @@ class MediaPreview(
             }
 
         } catch (e: Throwable) {
-            handleError(e, executor)
+            handleError(e, generation)
         }
     }
 
@@ -515,7 +525,7 @@ class MediaPreview(
     @Throws(Exception::class)
     private fun downloadWithProgress(
         inputStream: InputStream, contentLength: Long,
-        progressBar: ProgressBar, progressText: TextView
+        progressBar: ProgressBar, progressText: TextView, generation: Long
     ) {
         FileOutputStream(filePath).use { fos ->
             val buffer = ByteArray(8192)
@@ -529,7 +539,7 @@ class MediaPreview(
                 if (contentLength > 0) {
                     val progress = ((totalBytesRead * 100) / contentLength).toInt()
                     val sizeInfo = "${formatSize(totalBytesRead)} / ${formatSize(contentLength)}"
-                    postDownloadProgress(progressBar, progressText, progress, sizeInfo)
+                    postDownloadProgress(progressBar, progressText, progress, sizeInfo, generation)
                 }
             }
         }
@@ -540,7 +550,8 @@ class MediaPreview(
     @Throws(Exception::class)
     private fun downloadAndDecryptWithProgress(
         inputStream: InputStream, contentLength: Long,
-        mediaKey: String, mimeType: String, progressBar: ProgressBar, progressText: TextView
+        mediaKey: String, mimeType: String, progressBar: ProgressBar, progressText: TextView,
+        generation: Long
     ) {
         val encryptedData: ByteArray
         ByteArrayOutputStream().use { baos ->
@@ -556,7 +567,7 @@ class MediaPreview(
                 if (contentLength > 0) {
                     val progress = ((totalBytesRead * 100) / contentLength).toInt()
                     val sizeInfo = "${formatSize(totalBytesRead)} / ${formatSize(contentLength)}"
-                    postDownloadProgress(progressBar, progressText, progress, sizeInfo)
+                    postDownloadProgress(progressBar, progressText, progress, sizeInfo, generation)
                 }
             }
             encryptedData = baos.toByteArray()
@@ -577,12 +588,14 @@ class MediaPreview(
         progressBar: ProgressBar,
         progressText: TextView,
         progress: Int,
-        sizeInfo: String
+        sizeInfo: String,
+        generation: Long
     ) {
         val now = SystemClock.uptimeMillis()
         if (progress < 100 && now - lastProgressPostAt < 100L) return
         lastProgressPostAt = now
         mainHandler.post {
+            if (generation != previewGeneration) return@post
             progressBar.progress = progress
             progressText.text = "${Utils.getString(R.string.downloading)} $progress%\n$sizeInfo"
         }
@@ -904,10 +917,11 @@ class MediaPreview(
         ).toInt()
     }
 
-    private fun handleError(e: Throwable, executor: ExecutorService) {
+    private fun handleError(e: Throwable, generation: Long) {
         if (e is InvocationTargetException) {
             logDebug(e.cause)
             mainHandler.post {
+                if (generation != previewGeneration) return@post
                 Utils.showToast(
                     e.cause?.message ?: "Unknown error",
                     Toast.LENGTH_LONG
@@ -915,12 +929,16 @@ class MediaPreview(
             }
         } else {
             logDebug(e)
-            mainHandler.post { Utils.showToast(e.message, Toast.LENGTH_LONG) }
+            mainHandler.post {
+                if (generation != previewGeneration) return@post
+                Utils.showToast(e.message, Toast.LENGTH_LONG)
+            }
         }
-        cleanupDialog(executor)
+        cleanupDialog(generation)
     }
 
-    private fun cleanupResources(executor: ExecutorService?) {
+    private fun cleanupResources(generation: Long) {
+        if (generation != previewGeneration) return
         currentMediaPlayer?.let { mp ->
             try {
                 mp.release()
@@ -935,19 +953,16 @@ class MediaPreview(
                 path.delete()
             }
         }
-
-        if (executor != null && !executor.isShutdown) {
-            executor.shutdownNow()
-        }
     }
 
-    private fun cleanupDialog(executor: ExecutorService?) {
+    private fun cleanupDialog(generation: Long) {
         mainHandler.post {
+            if (generation != previewGeneration) return@post
             if (dialog?.isShowing == true) {
                 dialog?.dismiss()
             }
         }
-        cleanupResources(executor)
+        cleanupResources(generation)
     }
 
     @SuppressLint("ClickableViewAccessibility")

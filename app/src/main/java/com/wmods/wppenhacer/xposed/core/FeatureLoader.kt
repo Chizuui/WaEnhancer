@@ -560,7 +560,12 @@ class FeatureLoader {
             )
 
             XposedBridge.log("Loading Plugins")
-            val executorService = Executors.newSingleThreadExecutor { runnable ->
+            // Load plugins in parallel: each plugin registers its own hooks and
+            // its state writes are thread-safe (ConcurrentHashMap / CopyOnWrite
+            // sets), while reads happen at runtime, so hook registration order
+            // between plugins does not matter.
+            val poolSize = minOf(4, Runtime.getRuntime().availableProcessors().coerceAtLeast(2))
+            val executorService = Executors.newFixedThreadPool(poolSize) { runnable ->
                 Thread(runnable, "WAE-HookInstaller").apply {
                     isDaemon = true
                 }

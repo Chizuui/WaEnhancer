@@ -16,4 +16,7 @@
 * Anti-revoke now reads preferences once at hook time and serves most list-item lookups from memory instead of dispatching to the database executor for every item
 * Made the status-item field cache thread-safe (ConcurrentHashMap)
 * Cached SimpleDateFormat instances per thread for timestamp and filename formatting
+* Loaded all feature plugins in parallel (4 threads) to cut startup time, verified safe: DexKit 2.0 queries are thread-safe and all shared state is concurrent-safe
+* Media preview now reuses a single OkHttpClient and the shared executor instead of creating a new client/thread per download; stale downloads can no longer clobber a newer preview (generation guard)
+* Bounded the CustomView gradient-drawable cache with a byte-based LruCache instead of an unbounded HashMap
 
