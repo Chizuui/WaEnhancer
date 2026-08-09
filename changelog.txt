@@ -11,4 +11,9 @@
 * Disabled verbose logging by default for smoother performance
 * Optimized the View.setVisibility hook used by home filters to avoid synchronized map lookups
 * Reduced stack-trace scans in the Conversation screen color exception path from two walks to one
+* Cached JID sanitization regex and JID conversion results (createUserJid/phone-JID lookups) to eliminate repeated reflection and regex compilation on every chat item
+* Cached FMessage media-file reflection accessors so list rendering no longer rescans fields per access
+* Anti-revoke now reads preferences once at hook time and serves most list-item lookups from memory instead of dispatching to the database executor for every item
+* Made the status-item field cache thread-safe (ConcurrentHashMap)
+* Cached SimpleDateFormat instances per thread for timestamp and filename formatting
 

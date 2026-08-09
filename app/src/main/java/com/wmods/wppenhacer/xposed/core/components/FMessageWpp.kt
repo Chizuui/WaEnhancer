@@ -36,6 +36,27 @@ class FMessageWpp(fMessage: Any?) {
             "s.whatsapp.net", "newsletter", "lid", "g.us", "broadcast", "status"
         )
 
+        // Pre-compiled regex used to normalize JIDs (hot path)
+        private val JID_SANITIZE_REGEX = "\\.[\\d:]+@".toRegex()
+
+        // Cached reflection accessors for the media file (resolved once, not per access)
+        private val mediaFileFieldPairs: List<Pair<Field, Field>>? by lazy {
+            val mediaClass = abstractMediaMessageClass ?: return@lazy null
+            val pairs = ArrayList<Pair<Field, Field>>(2)
+            for (field in mediaClass.declaredFields) {
+                if (field.type.isPrimitive) continue
+                val fileField = ReflectionUtils.getFieldByType(field.type, File::class.java)
+                if (fileField != null) {
+                    runCatching {
+                        field.isAccessible = true
+                        fileField.isAccessible = true
+                    }
+                    pairs.add(Pair(field, fileField))
+                }
+            }
+            pairs
+        }
+
         @JvmStatic
         fun initialize(classLoader: ClassLoader) {
             try {
@@ -192,15 +213,11 @@ class FMessageWpp(fMessage: Any?) {
         get() {
             try {
                 if (!isMediaFile) return null
-                val mediaClass = abstractMediaMessageClass ?: return null
-                for (field in mediaClass.declaredFields) {
-                    if (field.type.isPrimitive) continue
-                    val fileField = ReflectionUtils.getFieldByType(field.type, File::class.java)
-                    if (fileField != null) {
-                        val mediaObject = ReflectionUtils.getObjectField(field, fmessage)
-                        val mediaFile = fileField.get(mediaObject) as? File
-                        if (mediaFile != null) return mediaFile
-                    }
+                val fieldPairs = mediaFileFieldPairs ?: return null
+                for ((field, fileField) in fieldPairs) {
+                    val mediaObject = ReflectionUtils.getObjectField(field, fmessage)
+                    val mediaFile = fileField.get(mediaObject) as? File
+                    if (mediaFile != null) return mediaFile
                 }
                 val filePath = MessageStore.getInstance().getMediaFromID(rowId) ?: return null
                 if (!filePath.startsWith("file://") && !filePath.startsWith("/")) {
@@ -378,7 +395,7 @@ class FMessageWpp(fMessage: Any?) {
                     null
                 }
                 raw?.let {
-                    val rawJidSanitized = raw.replaceFirst("\\.[\\d:]+@".toRegex(), "@")
+                    val rawJidSanitized = raw.replaceFirst(JID_SANITIZE_REGEX, "@")
                     if (checkValidLID(rawJidSanitized)) {
                         return UserJid(rawJidSanitized)
                     }
@@ -436,7 +453,7 @@ class FMessageWpp(fMessage: Any?) {
             val raw =
                 XposedHelpers.callMethod(this.phoneJid, "getRawString") as? String
                     ?: return@lazy null
-            raw.replaceFirst("\\.[\\d:]+@".toRegex(), "@")
+            raw.replaceFirst(JID_SANITIZE_REGEX, "@")
         }
 
         val userRawString: String? by lazy {
@@ -444,7 +461,7 @@ class FMessageWpp(fMessage: Any?) {
             val raw =
                 XposedHelpers.callMethod(this.userJid, "getRawString") as? String
                     ?: return@lazy null
-            raw.replaceFirst("\\.[\\d:]+@".toRegex(), "@")
+            raw.replaceFirst(JID_SANITIZE_REGEX, "@")
         }
 
         val phoneNumber: String?

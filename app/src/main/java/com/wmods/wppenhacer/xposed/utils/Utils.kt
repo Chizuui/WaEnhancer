@@ -146,12 +146,20 @@ object Utils {
         return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dipValue, metrics).toInt()
     }
 
+    // SimpleDateFormat is expensive to instantiate; cache one per thread.
+    private val dateTimeFormatThreadLocal: ThreadLocal<SimpleDateFormat> =
+        ThreadLocal.withInitial {
+            SimpleDateFormat("dd/MM/yyyy hh:mm:ss a", Locale.getDefault())
+        }
+
+    private val fileNameFormatThreadLocal: ThreadLocal<SimpleDateFormat> =
+        ThreadLocal.withInitial {
+            SimpleDateFormat("yyyyMMdd-HHmmss", Locale.getDefault())
+        }
+
     @JvmStatic
     fun getDateTimeFromMillis(timestamp: Long): String {
-        return SimpleDateFormat(
-            "dd/MM/yyyy hh:mm:ss a",
-            Locale.getDefault()
-        ).format(Date(timestamp))
+        return dateTimeFormatThreadLocal.get().format(Date(timestamp))
     }
 
     @SuppressLint("SdCardPath")
@@ -229,12 +237,8 @@ object Utils {
     fun generateName(userJid: UserJid, fileFormat: String?): String {
         val contactName = getContactName(userJid)
         val number = userJid.phoneRawString
-        return toValidFileName(contactName) + "_" + number + "_" + SimpleDateFormat(
-            "yyyyMMdd-HHmmss",
-            Locale.getDefault()
-        ).format(
-            Date()
-        ) + "." + fileFormat
+        return toValidFileName(contactName) + "_" + number + "_" + fileNameFormatThreadLocal.get()
+            .format(Date()) + "." + fileFormat
     }
 
 

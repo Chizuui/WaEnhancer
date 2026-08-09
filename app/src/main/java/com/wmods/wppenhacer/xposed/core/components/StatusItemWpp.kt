@@ -3,6 +3,7 @@ package com.wmods.wppenhacer.xposed.core.components
 import com.wmods.wppenhacer.xposed.utils.ReflectionUtils
 import java.io.File
 import java.lang.reflect.Field
+import java.util.concurrent.ConcurrentHashMap
 
 class StatusItemWpp private constructor(
     val fStatus: FStatusWpp?,
@@ -26,7 +27,8 @@ class StatusItemWpp private constructor(
     fun getMediaFile(): File? = directFMessage?.mediaFile ?: fStatus?.getMediaFile()
 
     companion object {
-        private val fStatusFieldCache = mutableMapOf<Class<*>, Field?>()
+        // Thread-safe field cache: from() is called on multiple threads
+        private val fStatusFieldCache = ConcurrentHashMap<Class<*>, Field?>()
 
         @JvmStatic
         fun from(obj: Any?): StatusItemWpp? {
@@ -35,8 +37,8 @@ class StatusItemWpp private constructor(
                 FMessageWpp.TYPE.isAssignableFrom(f.type)
             }
             fMsgField?.get(obj)?.let { return StatusItemWpp(null, FMessageWpp(it)) }
-            val fStatusField = fStatusFieldCache.getOrPut(obj.javaClass) {
-                ReflectionUtils.findFieldUsingFilterIfExists(obj.javaClass) { f ->
+            val fStatusField = fStatusFieldCache.computeIfAbsent(obj.javaClass) {
+                ReflectionUtils.findFieldUsingFilterIfExists(it) { f ->
                     FStatusWpp.TYPE.isAssignableFrom(f.type)
                 }
             }

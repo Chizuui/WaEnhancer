@@ -53,6 +53,18 @@ object WppCore {
     private var mWaDatabase: SQLiteDatabase? = null
     private val contactNameCache = LruCache<String, String>(200)
 
+    // Pre-compiled regex used to normalize JIDs (hot path: called for every message item)
+    private val jidSanitizeRegex = "\\.[\\d:]+@".toRegex()
+
+    // Bounded LRU caches for JID conversions (reflection calls are expensive).
+    // Each cache has its own key space/semantics: createUserJid stores the Jid
+    // built from a raw string, while getUserJidFromPhoneJid stores LID-converted
+    // results. Sharing one cache between them would corrupt values (phone Jid vs
+    // LID Jid for the same raw key), so they must stay separate.
+    private val userJidCache = LruCache<String, Any?>(512)
+    private val lidJidCache = LruCache<String, Any?>(512)
+    private val phoneJidCache = LruCache<String, Any?>(512)
+
     @JvmField
     var client: BaseClient? = null
 
@@ -169,10 +181,12 @@ object WppCore {
         try {
             var rawString = XposedHelpers.callMethod(lid, "getRawString") as? String
             if (rawString == null || !rawString.contains("@lid")) return lid
-            rawString = rawString.replaceFirst("\\.[\\d:]+@".toRegex(), "@")
+            rawString = rawString.replaceFirst(jidSanitizeRegex, "@")
+            phoneJidCache.get(rawString)?.let { return it }
             val newUser = createUserJid(rawString)
-            val result = ReflectionUtils.callMethod(convertLidToJid, mWaJidMapRepository, newUser)
-            return result ?: lid
+            val result = ReflectionUtils.callMethod(convertLidToJid, mWaJidMapRepository, newUser) ?: lid
+            phoneJidCache.put(rawString, result)
+            return result
         } catch (e: Exception) {
             XposedBridge.log(e)
         }
@@ -185,10 +199,12 @@ object WppCore {
         try {
             var rawString = XposedHelpers.callMethod(userJid, "getRawString") as? String
             if (rawString == null || rawString.contains("@lid")) return userJid
-            rawString = rawString.replaceFirst("\\.[\\d:]+@".toRegex(), "@")
+            rawString = rawString.replaceFirst(jidSanitizeRegex, "@")
+            lidJidCache.get(rawString)?.let { return it }
             val newUser = createUserJid(rawString)
-            val result = ReflectionUtils.callMethod(convertJidToLid, mWaJidMapRepository, newUser)
-            return result ?: userJid
+            val result = ReflectionUtils.callMethod(convertJidToLid, mWaJidMapRepository, newUser) ?: userJid
+            lidJidCache.put(rawString, result)
+            return result
         } catch (e: Exception) {
             XposedBridge.log(e)
         }
@@ -429,7 +445,10 @@ object WppCore {
     fun createUserJid(rawjid: String?): Any? {
         if (rawjid == null) return null
         return try {
-            mGenJidMethod?.invoke(null, rawjid)
+            userJidCache.get(rawjid)?.let { return it }
+            val result = mGenJidMethod?.invoke(null, rawjid)
+            if (result != null) userJidCache.put(rawjid, result)
+            result
         } catch (e: Exception) {
             XposedBridge.log(e)
             null
