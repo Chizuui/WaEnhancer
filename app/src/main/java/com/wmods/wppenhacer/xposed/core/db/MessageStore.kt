@@ -17,24 +17,8 @@ class MessageStore private constructor() {
             if (whatsappDatabase != null && whatsappDatabase!!.isOpen) {
                 return whatsappDatabase
             }
-            if (mSqLiteDatabase == null || !mSqLiteDatabase!!.isOpen) {
-                val dbFile = File(Utils.getApplication().filesDir.parentFile, "/databases/msgstore.db")
-                if (dbFile.exists()) {
-                    try {
-                        mSqLiteDatabase = SQLiteDatabase.openDatabase(
-                            dbFile.absolutePath,
-                            null,
-                            SQLiteDatabase.OPEN_READWRITE
-                        ).apply {
-                            enableWriteAheadLogging()
-                            execSQL("PRAGMA busy_timeout = 5000;")
-                        }
-                    } catch (e: Exception) {
-                        XposedBridge.log("WaEnhancer: Failed to open msgstore database: ${e.message}")
-                    }
-                }
-            }
-            return mSqLiteDatabase
+            XposedBridge.log("WaEnhancer: WhatsApp database not available.")
+            return null
         }
 
     private var mSqLiteDatabase: SQLiteDatabase? = null
@@ -49,11 +33,17 @@ class MessageStore private constructor() {
 
         @JvmStatic
         fun getInstance(): MessageStore {
-            return mInstance?.takeIf { it.sqLiteDatabase?.isOpen == true }
-                ?: synchronized(this) {
-                    mInstance?.takeIf { it.sqLiteDatabase?.isOpen == true }
-                        ?: MessageStore().also { mInstance = it }
+            return mInstance ?: synchronized(this) {
+                if (whatsappDatabase != null && whatsappDatabase!!.isOpen) {
+                    mInstance = MessageStore().also {
+                        it.mSqLiteDatabase = whatsappDatabase // Set internal field
+                    }
+                    return mInstance!!
                 }
+                XposedBridge.log("WaEnhancer: getInstance called when whatsappDatabase is not open.")
+                // Fallback, but sqLiteDatabase getter will return null
+                return MessageStore().also { mInstance = it }
+            }
         }
     }
 
