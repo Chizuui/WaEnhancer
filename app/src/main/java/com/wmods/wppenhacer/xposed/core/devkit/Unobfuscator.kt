@@ -2393,7 +2393,12 @@ object Unobfuscator {
             val methods =
                 findAllMethodUsingStrings(classLoader, StringMatchType.Contains, "/system/bin/su")
             if (methods.isEmpty()) throw RuntimeException("RootDetector method not found")
-            methods
+            // Only hook methods returning a boolean: returnConstant(false) is only valid for
+            // boolean return types. Newer WhatsApp versions contain methods using the
+            // "/system/bin/su" string that return other types (String, List, void, ...);
+            // hooking them with a Boolean result causes LSPosed to throw
+            // "Return value's type from hook callback does not match the hooked method".
+            methods.filter { it.returnType == Boolean::class.javaPrimitiveType }.toTypedArray()
         }
     }
 
@@ -2401,12 +2406,15 @@ object Unobfuscator {
     @JvmStatic
     fun loadCheckEmulator(classLoader: ClassLoader): Method {
         return UnobfuscatorCache.getInstance().getMethod(classLoader) {
-            findFirstMethodUsingStrings(
+            val method = findFirstMethodUsingStrings(
                 classLoader,
                 StringMatchType.Contains,
                 "Android SDK built for x86"
-            )
-                ?: throw RuntimeException("CheckEmulator method not found")
+            ) ?: throw RuntimeException("CheckEmulator method not found")
+            if (method.returnType != Boolean::class.javaPrimitiveType) {
+                throw RuntimeException("CheckEmulator method does not return boolean")
+            }
+            method
         }
     }
 
@@ -2414,8 +2422,12 @@ object Unobfuscator {
     @JvmStatic
     fun loadCheckCustomRom(classLoader: ClassLoader): Method {
         return UnobfuscatorCache.getInstance().getMethod(classLoader) {
-            findFirstMethodUsingStrings(classLoader, StringMatchType.Contains, "cyanogen")
+            val method = findFirstMethodUsingStrings(classLoader, StringMatchType.Contains, "cyanogen")
                 ?: throw RuntimeException("CheckCustomRom method not found")
+            if (method.returnType != Boolean::class.javaPrimitiveType) {
+                throw RuntimeException("CheckCustomRom method does not return boolean")
+            }
+            method
         }
     }
 
