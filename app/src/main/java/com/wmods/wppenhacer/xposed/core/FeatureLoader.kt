@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.Application
 import android.app.Instrumentation
+import android.database.sqlite.SQLiteDatabase
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -23,6 +24,7 @@ import com.wmods.wppenhacer.xposed.core.components.FStatusWpp
 import com.wmods.wppenhacer.xposed.core.components.ProtocolTreeNodeWpp
 import com.wmods.wppenhacer.xposed.core.components.SharedPreferencesWrapper
 import com.wmods.wppenhacer.xposed.core.components.WaContactWpp
+import com.wmods.wppenhacer.xposed.core.db.MessageStore
 import com.wmods.wppenhacer.xposed.core.devkit.Unobfuscator
 import com.wmods.wppenhacer.xposed.core.devkit.UnobfuscatorCache
 import com.wmods.wppenhacer.xposed.features.customization.BubbleColors
@@ -124,6 +126,8 @@ class FeatureLoader {
 
             Feature.DEBUG = pref.getBoolean("enablelogs", true)
             Utils.xprefs = pref
+
+            captureWhatsAppDatabaseConnections()
 
             XposedHelpers.findAndHookMethod(
                 Instrumentation::class.java, "callApplicationOnCreate", Application::class.java,
@@ -255,6 +259,41 @@ class FeatureLoader {
                     param.result = calendar.time
                 }
             })
+        }
+
+        /**
+         * Hooks SQLiteDatabase.openDatabase to capture the connection WhatsApp itself uses for
+         * msgstore.db and wa.db. WPPEnhancer then reuses that exact connection instead of opening
+         * its own second connection to the same file. A second connection with a different journal
+         * mode (TRUNCATE vs WAL) takes conflicting locks and causes "database is locked (code 5
+         * SQLITE_BUSY)" crashes inside WhatsApp's own write threads (AsyncCommitThread,
+         * ReceiptProcessingThread, ...).
+         */
+        private fun captureWhatsAppDatabaseConnections() {
+            try {
+                XposedBridge.hookAllMethods(
+                    SQLiteDatabase::class.java, "openDatabase",
+                    object : XC_MethodHook() {
+                        override fun afterHookedMethod(param: MethodHookParam) {
+                            try {
+                                val path = param.args.getOrNull(0) as? String ?: return
+                                val db = param.result as? SQLiteDatabase ?: return
+                                if (path.endsWith("msgstore.db")) {
+                                    MessageStore.whatsappDatabase = db
+                                    XposedBridge.log("WaEnhancer: Captured WhatsApp msgstore.db connection")
+                                } else if (path.endsWith("wa.db")) {
+                                    WppCore.whatsappWaDatabase = db
+                                    XposedBridge.log("WaEnhancer: Captured WhatsApp wa.db connection")
+                                }
+                            } catch (t: Throwable) {
+                                XposedBridge.log("WaEnhancer: Failed to capture WhatsApp database connection: ${t.message}")
+                            }
+                        }
+                    }
+                )
+            } catch (t: Throwable) {
+                XposedBridge.log("WaEnhancer: Failed to hook SQLiteDatabase.openDatabase: ${t.message}")
+            }
         }
 
         @Throws(Exception::class)

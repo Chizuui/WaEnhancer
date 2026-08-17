@@ -12,30 +12,59 @@ import java.util.stream.Collectors
 
 class MessageStore private constructor() {
 
-    private var sqLiteDatabase: SQLiteDatabase? = null
+    private var mSqLiteDatabase: SQLiteDatabase? = null
 
-    init {
-        val dbFile = File(Utils.getApplication().filesDir.parentFile, "/databases/msgstore.db")
-        if (dbFile.exists()) {
-            sqLiteDatabase = SQLiteDatabase.openDatabase(
-                dbFile.absolutePath,
-                null,
-                SQLiteDatabase.OPEN_READWRITE
-            )
+    /**
+     * Returns the database connection used for all MessageStore operations.
+     *
+     * Prefers the connection WhatsApp itself opened for msgstore.db (captured via a hook on
+     * SQLiteDatabase.openDatabase), so WPPEnhancer never creates a second connection to the same
+     * file. A second connection uses a different journal mode (TRUNCATE vs WhatsApp's WAL) and
+     * takes conflicting locks, which makes WhatsApp's own write threads crash with
+     * "database is locked (code 5 SQLITE_BUSY)".
+     *
+     * Only if the captured connection is unavailable does it fall back to opening its own
+     * connection, configured with WAL and a busy timeout to minimize lock contention.
+     */
+    private val sqLiteDatabase: SQLiteDatabase?
+        get() {
+            if (whatsappDatabase != null && whatsappDatabase!!.isOpen) {
+                return whatsappDatabase
+            }
+            if (mSqLiteDatabase == null || !mSqLiteDatabase!!.isOpen) {
+                val dbFile = File(Utils.getApplication().filesDir.parentFile, "/databases/msgstore.db")
+                if (dbFile.exists()) {
+                    try {
+                        mSqLiteDatabase = SQLiteDatabase.openDatabase(
+                            dbFile.absolutePath,
+                            null,
+                            SQLiteDatabase.OPEN_READWRITE
+                        ).apply {
+                            enableWriteAheadLogging()
+                            execSQL("PRAGMA busy_timeout = 5000;")
+                        }
+                    } catch (e: Exception) {
+                        XposedBridge.log("WaEnhancer: Failed to open msgstore database: ${e.message}")
+                    }
+                }
+            }
+            return mSqLiteDatabase
         }
-    }
 
     companion object {
+        /** Connection WhatsApp itself uses for msgstore.db, captured by FeatureLoader. */
+        @JvmStatic
+        @Volatile
+        var whatsappDatabase: SQLiteDatabase? = null
+
         @Volatile
         private var mInstance: MessageStore? = null
 
         @JvmStatic
         fun getInstance(): MessageStore {
-            return mInstance?.takeIf { it.sqLiteDatabase?.isOpen == true }
-                ?: synchronized(this) {
-                    mInstance?.takeIf { it.sqLiteDatabase?.isOpen == true }
-                        ?: MessageStore().also { mInstance = it }
-                }
+            return mInstance ?: synchronized(this) {
+                mInstance ?: MessageStore().also { mInstance = it }
+            }
         }
     }
 

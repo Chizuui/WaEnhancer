@@ -52,6 +52,11 @@ object WppCore {
     private var mActionUser: Any? = null
     private var mWaDatabase: SQLiteDatabase? = null
 
+    /** Connection WhatsApp itself uses for wa.db, captured by FeatureLoader. */
+    @JvmField
+    @Volatile
+    var whatsappWaDatabase: SQLiteDatabase? = null
+
     @JvmField
     var client: BaseClient? = null
 
@@ -312,14 +317,25 @@ object WppCore {
     @JvmStatic
     fun loadWADatabase() {
         if (mWaDatabase != null) return
+        val captured = whatsappWaDatabase
+        if (captured != null && captured.isOpen) {
+            mWaDatabase = captured
+            return
+        }
         val dataDir = Utils.getApplication().filesDir.parentFile
         val database = File(dataDir, "databases/wa.db")
         if (database.exists()) {
-            mWaDatabase = SQLiteDatabase.openDatabase(
-                database.absolutePath,
-                null,
-                SQLiteDatabase.OPEN_READONLY
-            )
+            try {
+                mWaDatabase = SQLiteDatabase.openDatabase(
+                    database.absolutePath,
+                    null,
+                    SQLiteDatabase.OPEN_READONLY
+                ).apply {
+                    execSQL("PRAGMA busy_timeout = 5000;")
+                }
+            } catch (e: Exception) {
+                XposedBridge.log("WaEnhancer: Failed to open wa database: ${e.message}")
+            }
         }
     }
 
@@ -758,6 +774,10 @@ object WppCore {
 
     @JvmStatic
     fun getWaDatabase(): SQLiteDatabase? {
+        val captured = whatsappWaDatabase
+        if (captured != null && captured.isOpen) {
+            return captured
+        }
         loadWADatabase()
         return mWaDatabase
     }
