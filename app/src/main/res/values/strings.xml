@@ -164,6 +164,12 @@
     <string name="phone_call">Phone Call</string>
     <string name="whatsapp_call">Whatsapp Call</string>
     <string name="home_screen">Home Screen</string>
+    <string name="floating_bottom_bar">Floating Bottom Bar</string>
+    <string name="floating_bottom_bar_sum">Enable iOS-style floating bottom navigation bar</string>
+    <string name="floating_bottom_bar_radius">Bottom Bar Corner Radius</string>
+    <string name="floating_bottom_bar_radius_sum">Adjust the border radius of the floating bottom bar</string>
+    <string name="disable_swipe_up_in_group">Disable swipe up gesture in groups</string>
+    <string name="disable_swipe_up_in_group_sum">Disables the swipe up gesture in group chats</string>
     <string name="selection_of_call_type">Enable selection of call type</string>
     <string name="selection_of_call_type_sum">Show an option to select whether you want a call via phone or WhatsApp</string>
     <string name="yes">Yes</string>
@@ -202,6 +208,13 @@
     <string name="copy_to_clipboard">Copy to clipboard</string>
     <string name="copied_to_clipboard">Copied to clipboard</string>
     <string name="error_detected">Error detected</string>
+    <string name="whatsapp_crash_report">WhatsApp crash report</string>
+    <string name="crash_info">Crash info</string>
+    <string name="crash_trace">Trace</string>
+    <string name="whatsapp_version">WhatsApp version</string>
+    <string name="whatsapp_package">WhatsApp package</string>
+    <string name="wae_version">WAE version</string>
+    <string name="crash_android_version">Android version</string>
     <string name="rebooting">Rebooting</string>
     <string name="deleted_message">deleted a message</string>
     <string name="deleted_status">deleted a status</string>
@@ -229,6 +242,10 @@
     <string name="title_audio">Audio</string>
     <string name="android_version">Android SDK</string>
     <string name="message_removed_on">This message was removed on %s.</string>
+    <string name="force_disable_emojis">Force Disable Emojis</string>
+    <string name="force_disable_emojis_sum">Blocks WhatsApp emoji assets, making emojis invisible (use keyboard emoji instead).</string>
+    <string name="force_disable_emojis_alert_title">Force Disable Emojis</string>
+    <string name="force_disable_emojis_alert_msg">This feature will make emojis invisible in the emoji selector. To send emojis, use your device\'s keyboard emoji instead.</string>
     <string name="disable_default_emojis">Disable Default Emojis</string>
     <string name="theme_mode">Dark Theme Wa Enhancer</string>
     <string name="theme_mode_sum">Force a theme mode in the Wa Enhancer</string>
@@ -243,7 +260,7 @@
     <string name="color_preset_orange">Orange</string>
     <string name="color_preset_red">Red</string>
     <string name="color_preset_pink">Pink</string>
-    <string name="disable_default_emojis_sum">Disables Whatsapp\'s default emojis and uses system emojis\n(NOTE: Whatsapp emojis will disappear from the selector, use the keyboard to insert).</string>
+    <string name="disable_default_emojis_sum">Disables WhatsApp\'s default emojis and uses system emojis.</string>
     <string name="other">Other</string>
     <string name="enable_media_preview">Enable Media Preview</string>
     <string name="enable_media_preview_sum">Add a button to preview media in a temporary file (without downloading it permanently)</string>
@@ -414,11 +431,14 @@
     <string name="platform_s">Platform: %s</string>
     <string name="wpp_version_s">WhatsApp Version: %s</string>
     <string name="call_information">Call Information</string>
-    <string name="ask_download_folder">To use WAE Enhancer\'s download functions, you must select a folder to save the downloaded files.</string>
-    <string name="download_folder_permission">Download Folder Permission</string>
-    <string name="lite_mode">Lite Mode</string>
-    <string name="lite_mode_sum">Lite Mode disables most theme features and the connection bridge that keeps WhatsApp always active is turned off.</string>
     <string name="update_check">Automatically Check for Update</string>
+    <string name="update_available">Update Available</string>
+    <string name="update_available_summary">New version %s is available!</string>
+    <string name="up_to_date">Up to Date</string>
+    <string name="checking_for_updates">Checking for updates…</string>
+    <string name="update_check_failed">Unable to Check for Updates</string>
+    <string name="update_check_failed_summary">Could not reach update server</string>
+    <string name="current_version_s">Current version %s</string>
     <string name="update_check_sum">Enable or Disable Auto Check for Update. This will disable the popup inside the WhatsApp Application.</string>
     <string name="change_default_dpi">Change Default DPI</string>
     <string name="change_default_dpi_sum">Change the DPI setting for the application. Use 0 to reset to default.</string>
@@ -436,14 +456,14 @@
     <string name="disable_status_in_the_profile_photo">Disable Status in the profile photo</string>
     <string name="disable_status_in_the_profile_photo_sum">Disables the circle that appears in the profile photo of each contact when there is new status</string>
     <string name="download_not_available">Download not available or media has not been fully downloaded</string>
-    <string name="possible_block_detected">Possible block detected</string>
-    <string name="block_not_detected">Block not detected</string>
-    <string name="checking_if_the_contact_is_blocked">Checking if the contact is blocked...</string>
-    <string name="show_contact_blocked">Show Contact Blocked in Conversation</string>
-    <string name="show_contact_blocked_sum">This option verifies whether the contact may have blocked you (note: false positives may occur).</string>
-    <string name="block_unverified">Block Unverified</string>
+    <string name="checking_if_contact_added">Checking if the contact added you...</string>
+    <string name="show_contact_added_status">Show Contact Added Status in Conversation</string>
+    <string name="show_contact_added_status_sum">This option verifies whether the contact added you or has a public profile photo.</string>
+    <string name="contact_added">The contact added you or has a public profile photo.</string>
     <string name="disable_whatsapp_expiration">Disable WhatsApp Expiration</string>
     <string name="disable_whatsapp_expiration_sum">Deactivates the expired version of WhatsApp, (Note: Manual Disable to update WhatsApp on the Play Store or mark the Play Store on LSposed)</string>
+    <string name="disable_ads">Disable Ads</string>
+    <string name="disable_ads_sum">Blocks ads from appearing in WhatsApp</string>
     <string name="lockedchats_enhancer">Enhanced Locked Chats</string>
     <string name="lockedchats_enhancer_sum">Improve locked chats by hiding notifications and contacts from the contact list</string>
     <string name="call_recording_title">Call Recording</string>
@@ -467,10 +487,7 @@
     <string name="search_no_results">No features found</string>
     <string name="search_try_different_keywords">Try different keywords or browse categories</string>
     <string name="search_start_typing">Start typing to search features</string>
-    <string name="no_deleted_messages">No deleted messages found</string>
-    <string name="deleted_messages_title">Deleted By Me</string>
     <string name="restore_message">Restore</string>
-    <string name="deleted_messages_sum">View messages deleted by others</string>
     <string name="restore_feature_title">Restore Feature</string>
     <string name="restore_feature_desc">"Coming soon!"</string>
     <string name="action_follow_developer">Coming soon!</string>
@@ -479,6 +496,10 @@
     <string name="contact_probably_not_added">Contact probably didn\'t add you!</string>
     <string name="jump_first_message">Jump to First Message</string>
     <string name="jump_first_message_sum">Add a button to skip the first message in the conversations screen</string>
+    <string name="copy_selection_message_title">Copy Message Selection</string>
+    <string name="copy_selection_message_sum">Add a button to select and copy a specific part of a message</string>
+    <string name="copy_selection_action">✂ Copy Selection</string>
+    <string name="copy_selection_dialog_title">Copy Text</string>
     <string name="picker_loading_contacts">Loading contacts…</string>
     <string name="mode_all">All</string>
     <string name="picker_contacts">Contacts</string>
@@ -486,4 +507,45 @@
     <string name="picker_no_results">No contacts found</string>
     <string name="picker_group">Group</string>
     <string name="picker_contact">Contact</string>
+    <string name="converting_audio">Converting audio, wait a few minutes until it is complete...</string>
+    <string name="preview_image">Preview Image</string>
+    <string name="preview_video">Preview Video</string>
+    <string name="downloading">\"Downloading... \"</string>
+    <string name="decrypting">Decrypting...</string>
+    <string name="configui">New Settings Style</string>
+    <string name="configui_sum">Enable the new settings style, with profile photo on home screen toolbar or Tab</string>
+    <string name="configui_mode_default">Default</string>
+    <string name="configui_mode_toolbar_photo">Profile Photo on Toolbar</string>
+    <string name="configui_mode_you_tab">Enable You tab on home screen</string>
+    <string name="remove_sticker_white_outline_sum">Remove the white border when creating stickers</string>
+    <string name="remove_sticker_white_outline">Remove sticker white outline</string>
+    <string name="stickers">Stickers</string>
+    <string name="alert_module_notfound">WaEnhancer module not found, HMA is probably hiding the module, remove WhatsApp from the HMA list and try again.</string>
+    <!-- Root Diagnostics -->
+    <string name="diag_title">Root Diagnostics</string>
+    <string name="diag_summary">Check for sepolicy issues and Hide My App List blocks affecting WhatsApp.</string>
+    <string name="diag_button">Analyze Device</string>
+    <string name="diag_dialog_title">Diagnostic Log</string>
+    <string name="diag_root_granted">Root access granted.</string>
+    <string name="diag_root_denied">Root access denied. Diagnostics require root access.</string>
+    <string name="diag_close">Close</string>
+
+    <!-- Sepolicy -->
+    <string name="diag_sepolicy_checking">Checking sepolicy log...</string>
+    <string name="diag_sepolicy_not_found">LSPosed verbose log not found or empty.</string>
+    <string name="diag_sepolicy_no_issues">No sepolicy issues found in the log.</string>
+    <string name="diag_sepolicy_found">Sepolicy issue found:</string>
+    <string name="diag_sepolicy_broken">Broken sepolicy detected. The root solution and the kernel patch must be the same version. If the error persists, switch to another root provider compatible with your device.</string>
+
+    <!-- Hide My App List -->
+    <string name="diag_hma_checking">Checking Hide My App List status...</string>
+    <string name="diag_hma_not_active">Hide My App List is not active.</string>
+    <string name="diag_hma_zygisk_active">Hide My App List (Zygisk) is active.</string>
+    <string name="diag_hma_lsposed_active">Hide My App List (LSPosed) is active.</string>
+    <string name="diag_hma_not_found">Hide My App List configuration not found.</string>
+    <string name="diag_hma_invalid">Hide My App List configuration is invalid.</string>
+    <string name="diag_hma_no_blocks">No Hide My App List blocks detected for WhatsApp.</string>
+    <string name="diag_hma_blocked">Hide My App List is hiding WaEnhancer from:</string>
+    <string name="diag_hma_disable">Disable the block for WhatsApp/Business in Hide My App List so WaEnhancer can work correctly.</string>
+    <string name="diag_copied">Line copied to clipboard</string>
 </resources>

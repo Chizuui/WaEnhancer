@@ -19,7 +19,6 @@ import de.robv.android.xposed.XC_MethodReplacement
 import de.robv.android.xposed.XSharedPreferences
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_InitPackageResources
 import de.robv.android.xposed.callbacks.XC_InitPackageResources.InitPackageResourcesParam
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 
@@ -31,7 +30,7 @@ class WppXposed : IXposedHookLoadPackage, IXposedHookInitPackageResources, IXpos
         private var pref: XSharedPreferences? = null
 
         @JvmStatic
-        var ResParam: XC_InitPackageResources.InitPackageResourcesParam? = null
+        var ResParam: InitPackageResourcesParam? = null
 
         @JvmStatic
         fun getPref(): XSharedPreferences {
@@ -46,7 +45,6 @@ class WppXposed : IXposedHookLoadPackage, IXposedHookInitPackageResources, IXpos
         }
     }
 
-    @SuppressLint("WorldReadableFiles")
     @Throws(Throwable::class)
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         val packageName = lpparam.packageName
@@ -59,29 +57,33 @@ class WppXposed : IXposedHookLoadPackage, IXposedHookInitPackageResources, IXpos
                 "isXposedEnabled",
                 XC_MethodReplacement.returnConstant(true)
             )
+
             @Suppress("DEPRECATION")
+            @SuppressLint("WorldReadableFiles")
             XposedHelpers.findAndHookMethod(
                 PreferenceManager::class.java.name,
                 classLoader,
                 "getDefaultSharedPreferencesMode",
                 XC_MethodReplacement.returnConstant(ContextWrapper.MODE_WORLD_READABLE)
             )
+
+            XposedHelpers.findAndHookMethod(
+                "android.app.ContextImpl", classLoader, "checkMode", Int::class.javaPrimitiveType!!, XC_MethodReplacement.DO_NOTHING)
             return
         }
 
         AntiUpdater.hookSession(lpparam)
 
-        Patch.handleLoadPackage(lpparam, getPref())
+        Patch.handleLoadPackage(lpparam)
 
         ScopeHook.hook(lpparam)
 
-        if ((packageName == FeatureLoader.PACKAGE_WPP && App.isOriginalPackage()) || packageName == FeatureLoader.PACKAGE_BUSINESS) {
-            XposedBridge.log("[•] This package: ${lpparam.packageName}")
-
-            // Load features
-            FeatureLoader.start(classLoader, getPref(), lpparam.appInfo.sourceDir)
-
-            disableSecureFlag()
+        if ((packageName == FeatureLoader.PACKAGE_WPP && App.isOriginalPackage) || packageName == FeatureLoader.PACKAGE_BUSINESS) {
+            if (lpparam.isFirstApplication) { // I believe this may fix the problem when using multiple accounts, not yet tested
+                XposedBridge.log("[•] This package: ${lpparam.packageName}")
+                FeatureLoader.start(classLoader, lpparam.appInfo.sourceDir)
+                disableSecureFlag()
+            }
         }
     }
 

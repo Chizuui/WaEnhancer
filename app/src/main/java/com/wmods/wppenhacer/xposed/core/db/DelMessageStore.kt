@@ -1,15 +1,12 @@
 package com.wmods.wppenhacer.xposed.core.db
 
-import android.content.ContentValues
 import android.content.Context
-import android.database.sqlite.SQLiteDatabase
 import com.wmods.wppenhacer.xposed.core.db.entity.DelMessage
-import com.wmods.wppenhacer.xposed.core.db.entity.DeletedMessage
 
-class DelMessageStore private constructor(context: Context) {
+class DelMessageStore private constructor(private val context: Context) {
 
-    private val database = DelMessageDatabase.getInstance(context)
-    private val dao = database.delMessageDao()
+    private var database = DelMessageDatabase.getInstance(context)
+    private var dao = database.delMessageDao()
 
     companion object {
         @Volatile
@@ -23,69 +20,48 @@ class DelMessageStore private constructor(context: Context) {
         }
     }
 
-    fun insertMessage(jid: String, msgid: String, timestamp: Long) {
-        val message = DelMessage(jid = jid, msgid = msgid, timestamp = timestamp)
-        dao.insertMessage(message)
-    }
-
-    fun insertDeletedMessage(message: DeletedMessage) {
-        dao.insertDeletedMessage(message)
-    }
-
-    fun getDeletedMessagesByChat(chatJid: String): List<DeletedMessage?> {
-        return dao.getDeletedMessagesByChat(chatJid)
-    }
-
-    fun getAllDeletedMessages(): List<DeletedMessage> {
-        return getDeletedMessages(false)
-    }
-
-    fun getDeletedMessages(isGroup: Boolean): List<DeletedMessage> {
-        return if (isGroup) {
-            dao.getGroupDeletedMessages()
-        } else {
-            dao.getNonGroupDeletedMessages()
+    private fun <T> safeDbCall(fallback: T, block: () -> T): T {
+        return try {
+            block()
+        } catch (e: IllegalStateException) {
+            if (e.message?.contains("Migration didn't properly handle") == true) {
+                resetDatabase()
+                try {
+                    block()
+                } catch (_: Exception) {
+                    fallback
+                }
+            } else {
+                fallback
+            }
         }
     }
 
-    fun getAllDeletedMessagesInternal(): java.util.ArrayList<DeletedMessage> {
-        return java.util.ArrayList(dao.getAllDeletedMessagesInternal())
+    private fun resetDatabase() {
+        DelMessageDatabase.resetInstance()
+        context.deleteDatabase("delmessages.db")
+        database = DelMessageDatabase.getInstance(context)
+        dao = database.delMessageDao()
     }
 
-    fun deleteMessage(keyId: String) {
-        dao.deleteMessage(keyId)
-    }
-
-    fun deleteMessages(keyIds: List<String>?) {
-        if (keyIds.isNullOrEmpty()) return
-        dao.deleteMessages(keyIds)
-    }
-
-    fun deleteMessagesByChat(chatJid: String) {
-        dao.deleteMessagesByChat(chatJid)
+    fun insertMessage(jid: String, msgid: String, timestamp: Long) {
+        safeDbCall(Unit) {
+            val message = DelMessage(jid = jid, msgid = msgid, timestamp = timestamp)
+            dao.insertMessage(message)
+        }
     }
 
     fun getMessagesByJid(jid: String?): java.util.HashSet<String> {
         if (jid == null) return java.util.HashSet()
-        return java.util.HashSet(dao.getMessagesByJid(jid))
+        return safeDbCall(java.util.HashSet()) {
+            HashSet(dao.getMessagesByJid(jid))
+        }
     }
 
     fun getTimestampByMessageId(msgid: String): Long {
-        return dao.getTimestampByMessageId(msgid) ?: 0L
+        return safeDbCall(0L) {
+            dao.getTimestampByMessageId(msgid) ?: 0L
+        }
     }
-
-    fun updateContactName(chatJid: String, newContactName: String) {
-        dao.updateContactNameByChat(chatJid, newContactName)
-    }
-
-    fun insertDeletedMessages(values: ContentValues): Long {
-        val dbWrite = database.openHelper.writableDatabase
-        return dbWrite.insert(
-            "deleted_for_me",
-            SQLiteDatabase.CONFLICT_REPLACE,
-            values
-        )
-    }
-
 
 }

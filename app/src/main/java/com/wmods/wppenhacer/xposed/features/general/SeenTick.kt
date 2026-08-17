@@ -31,8 +31,9 @@ import com.wmods.wppenhacer.xposed.utils.DebugUtils
 import com.wmods.wppenhacer.xposed.utils.DesignUtils
 import com.wmods.wppenhacer.xposed.utils.ReflectionUtils
 import com.wmods.wppenhacer.xposed.utils.Utils
+import com.wmods.wppenhacer.xposed.utils.WaeCoroutineExceptionHandler
 import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XSharedPreferences
+import android.content.SharedPreferences 
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import kotlinx.coroutines.CoroutineScope
@@ -49,11 +50,11 @@ import java.util.concurrent.ConcurrentHashMap
 
 class SeenTick(
     loader: ClassLoader,
-    preferences: XSharedPreferences
+    preferences:SharedPreferences
 ) : Feature(loader, preferences) {
 
     private val messageMap = ConcurrentHashMap<String, WeakReference<ImageView>>()
-    val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    val scope = CoroutineScope(Dispatchers.Default + SupervisorJob() + WaeCoroutineExceptionHandler)
 
     companion object {
         private var mWaJobManager: Any? = null
@@ -412,21 +413,23 @@ class SeenTick(
                 if (ticktype == 1) item.setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
 
                 item.setOnMenuItemClickListener {
-                    val userJid = fMessage.key.remoteJid
-                    val messageID = fMessage.key.messageID
-                    MessageHistoryStore.getInstance().updateViewedMessage(
-                        userJid.phoneRawString,
-                        messageID,
-                        MessageHistoryStore.ReceiptType.PLAYED,
-                        true
-                    )
-                    MessageHistoryStore.getInstance().updateViewedMessage(
-                        userJid.phoneRawString,
-                        messageID,
-                        MessageHistoryStore.ReceiptType.READ,
-                        true
-                    )
-                    sendBlueTickMedia(fMessage)
+                    scope.launch(Dispatchers.IO) {
+                        val userJid = fMessage.key.remoteJid
+                        val messageID = fMessage.key.messageID
+                        MessageHistoryStore.getInstance().updateViewedMessage(
+                            userJid.phoneRawString,
+                            messageID,
+                            MessageHistoryStore.ReceiptType.PLAYED,
+                            true
+                        )
+                        MessageHistoryStore.getInstance().updateViewedMessage(
+                            userJid.phoneRawString,
+                            messageID,
+                            MessageHistoryStore.ReceiptType.READ,
+                            true
+                        )
+                        sendBlueTickMedia(fMessage)
+                    }
                     Utils.showToast(
                         Utils.getString(R.string.sending_read_blue_tick),
                         Toast.LENGTH_SHORT
@@ -437,7 +440,7 @@ class SeenTick(
         })
 
         XposedHelpers.findAndHookMethod(
-            WppCore.getViewOnceViewerActivityClass(classLoader),
+            WppCore.viewOnceViewerActivityClass,
             "onCreateOptionsMenu",
             Menu::class.java,
             object : XC_MethodHook() {
@@ -523,7 +526,7 @@ class SeenTick(
         scope.launch {
             val phoneNumber = userJid.phoneNumber
             val userRaw = userJid.userRawString ?: ""
-            if (phoneNumber == Utils.getMyNumber() || userRaw.contains("lid_me")) return@launch
+            if (phoneNumber == Utils.getMyNumber() || userRaw.contains("lid_me") || userRaw.contains("status_me")) return@launch
 
             val messages = ArrayList<FMessageWpp>()
             val hiddenMessages = MessageHistoryStore.getInstance()

@@ -8,16 +8,25 @@ import android.database.sqlite.SQLiteDatabase
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.os.Looper
+import android.util.Log
 import android.widget.Toast
 import androidx.core.content.ContextCompat
+import com.crossbowffs.remotepreferences.RemotePreferences
 import com.wmods.wppenhacer.App
 import com.wmods.wppenhacer.BuildConfig
 import com.wmods.wppenhacer.R
 import com.wmods.wppenhacer.UpdateChecker
+import com.wmods.wppenhacer.WppXposed
+import com.wmods.wppenhacer.activities.CrashReportActivity
 import com.wmods.wppenhacer.xposed.core.components.AlertDialogWpp
 import com.wmods.wppenhacer.xposed.core.components.FMessageWpp
 import com.wmods.wppenhacer.xposed.core.components.FStatusWpp
@@ -28,12 +37,14 @@ import com.wmods.wppenhacer.xposed.core.db.MessageStore
 import com.wmods.wppenhacer.xposed.core.devkit.Unobfuscator
 import com.wmods.wppenhacer.xposed.core.devkit.UnobfuscatorCache
 import com.wmods.wppenhacer.xposed.features.customization.BubbleColors
-import com.wmods.wppenhacer.xposed.features.customization.ContactBlockedVerify
+import com.wmods.wppenhacer.xposed.features.customization.ContactVerify
 import com.wmods.wppenhacer.xposed.features.customization.CustomThemeV2
 import com.wmods.wppenhacer.xposed.features.customization.CustomTime
 import com.wmods.wppenhacer.xposed.features.customization.CustomToolbar
 import com.wmods.wppenhacer.xposed.features.customization.CustomView
+import com.wmods.wppenhacer.xposed.features.customization.DefaultEmoji
 import com.wmods.wppenhacer.xposed.features.customization.FilterGroups
+import com.wmods.wppenhacer.xposed.features.customization.FloatingBottomBar
 import com.wmods.wppenhacer.xposed.features.customization.HideSeenView
 import com.wmods.wppenhacer.xposed.features.customization.HideTabs
 import com.wmods.wppenhacer.xposed.features.customization.IGStatus
@@ -44,11 +55,9 @@ import com.wmods.wppenhacer.xposed.features.general.AntiRevoke
 import com.wmods.wppenhacer.xposed.features.general.CallType
 import com.wmods.wppenhacer.xposed.features.general.ChatLimit
 import com.wmods.wppenhacer.xposed.features.general.DeleteStatus
-import com.wmods.wppenhacer.xposed.features.general.LiteMode
 import com.wmods.wppenhacer.xposed.features.general.NewChat
 import com.wmods.wppenhacer.xposed.features.general.Others
 import com.wmods.wppenhacer.xposed.features.general.PinnedLimit
-import com.wmods.wppenhacer.xposed.features.general.RecoverDeleteForMe
 import com.wmods.wppenhacer.xposed.features.general.SeenTick
 import com.wmods.wppenhacer.xposed.features.general.ShareLimit
 import com.wmods.wppenhacer.xposed.features.general.ShowEditMessage
@@ -67,6 +76,7 @@ import com.wmods.wppenhacer.xposed.features.others.AudioTranscript
 import com.wmods.wppenhacer.xposed.features.others.BackupRestore
 import com.wmods.wppenhacer.xposed.features.others.Channels
 import com.wmods.wppenhacer.xposed.features.others.ChatFilters
+import com.wmods.wppenhacer.xposed.features.others.CopySelectionMessage
 import com.wmods.wppenhacer.xposed.features.others.CopyStatus
 import com.wmods.wppenhacer.xposed.features.others.DebugFeature
 import com.wmods.wppenhacer.xposed.features.others.GoogleTranslate
@@ -93,10 +103,8 @@ import com.wmods.wppenhacer.xposed.utils.ReflectionUtils
 import com.wmods.wppenhacer.xposed.utils.Utils
 import de.robv.android.xposed.SELinuxHelper
 import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XSharedPreferences
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.services.BaseService
 import java.util.Calendar
 import java.util.Collections
 import java.util.Date
@@ -110,22 +118,26 @@ class FeatureLoader {
         @JvmField
         var mApp: Application? = null
 
+        lateinit var moduleContext: Context
+
         const val PACKAGE_WPP = "com.whatsapp"
         const val PACKAGE_BUSINESS = "com.whatsapp.w4b"
 
-        private val list = ArrayList<ErrorItem>()
+        private val list = Collections.synchronizedList(ArrayList<ErrorItem>())
         private var supportedVersions: List<String>? = null
         private var currentVersion: String? = null
+        private var crashHandlerInstalled = false
+        private const val UPDATE_CHECK_COOLDOWN_MS = 6 * 60 * 60 * 1000L
+        private var lastUpdateCheckScheduledAt = 0L
 
         @JvmStatic
-        fun start(loader: ClassLoader, pref: XSharedPreferences, sourceDir: String) {
+        fun start(loader: ClassLoader, sourceDir: String) {
             if (!Unobfuscator.initWithPath(sourceDir)) {
                 XposedBridge.log("Can't init dexkit")
                 return
             }
 
-            Feature.DEBUG = pref.getBoolean("enablelogs", true)
-            Utils.xprefs = pref
+            Utils.appClassLoader = loader
 
             captureWhatsAppDatabaseConnections()
 
@@ -135,6 +147,9 @@ class FeatureLoader {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         mApp = param.args[0] as Application
                         val application = mApp!!
+                        val pref = getPreferences(application)
+                        Feature.DEBUG = pref.getBoolean("enablelogs", true)
+                        Utils.xprefs = pref
 
                         if (pref.getBoolean("bootloader_spoofer", false)) {
                             HookBL.hook(loader, pref)
@@ -142,12 +157,10 @@ class FeatureLoader {
                         }
 
                         val packageManager = application.packageManager
-                        @Suppress("DEPRECATION")
-                        pref.registerOnSharedPreferenceChangeListener { _, _ -> pref.reload() }
-
                         val packageInfo = packageManager.getPackageInfo(application.packageName, 0)
                         XposedBridge.log(packageInfo.versionName)
                         currentVersion = packageInfo.versionName
+                        installCrashHandler(application, packageInfo.versionName.orEmpty())
 
                         val resIdArray = if (application.packageName == PACKAGE_WPP)
                             R.array.supported_versions_wpp
@@ -160,6 +173,7 @@ class FeatureLoader {
                         registerReceivers()
 
                         try {
+                            initializeModuleContext()
                             val timeMillis = System.currentTimeMillis()
                             UnobfuscatorCache.init(application)
                             SharedPreferencesWrapper.hookInit(application.classLoader)
@@ -208,12 +222,14 @@ class FeatureLoader {
                 })
 
             XposedHelpers.findAndHookMethod(
-                WppCore.getHomeActivityClass(loader), "onCreate", Bundle::class.java,
+                Activity::class.java, "onCreate", Bundle::class.java,
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
-                        if (list.isNotEmpty()) {
+                        if (param.thisObject.javaClass.simpleName != "HomeActivity") return
+                        val errors = synchronized(list) { list.toList() }
+                        if (errors.isNotEmpty()) {
                             val activity = param.thisObject as Activity
-                            val msg = list.joinToString("\n") { "${it.pluginName} - ${it.message}" }
+                            val msg = errors.joinToString("\n") { "${it.pluginName} - ${it.message}" }
 
                             AlertDialogWpp(activity)
                                 .setTitle(activity.getString(R.string.error_detected))
@@ -229,7 +245,7 @@ class FeatureLoader {
                                         mApp?.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                                     val clip = ClipData.newPlainText(
                                         "text",
-                                        list.joinToString("\n") { it.toString() })
+                                         errors.joinToString("\n") { it.toString() })
                                     clipboard.setPrimaryClip(clip)
                                     Toast.makeText(
                                         mApp,
@@ -242,6 +258,94 @@ class FeatureLoader {
                         }
                     }
                 })
+        }
+
+        private fun getPreferences(context: Context): SharedPreferences {
+            val pref = WppXposed.getPref()
+            pref.reload()
+            try {
+                val fileCanRead =
+                    SELinuxHelper.getAppDataFileService().checkFileAccess(pref.file.absolutePath, 4)
+                if (fileCanRead) {
+                    return pref
+                }
+            } catch (e: Exception) {
+                XposedBridge.log(e)
+            }
+            XposedBridge.log("XSharedPreferences not accessible, using RemotePreferences fallback")
+            return RemotePreferences(
+                context,
+                BuildConfig.APPLICATION_ID + ".preferences",
+                BuildConfig.APPLICATION_ID + "_preferences"
+            )
+        }
+
+        private fun initializeModuleContext() {
+            try {
+                val context = mApp!!.createPackageContext(
+                    BuildConfig.APPLICATION_ID,
+                    Context.CONTEXT_INCLUDE_CODE or Context.CONTEXT_IGNORE_SECURITY
+                )
+                moduleContext = android.view.ContextThemeWrapper(context, R.style.AppTheme)
+            } catch (_: PackageManager.NameNotFoundException) {
+                throw PackageManager.NameNotFoundException(Utils.application.getString(R.string.alert_module_notfound))
+            }
+        }
+
+        private fun installCrashHandler(application: Application, whatsAppVersion: String) {
+            if (crashHandlerInstalled) return
+            crashHandlerInstalled = true
+
+            val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+            Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                try {
+                    XposedBridge.log(throwable)
+                    val isMainThread = Looper.getMainLooper().thread == thread
+                    val isFatalSystemError = throwable is Error
+                    if (!isMainThread && !isFatalSystemError) {
+                        previousHandler?.uncaughtException(thread, throwable)
+                        return@setDefaultUncaughtExceptionHandler
+                    }
+                    val crashInfo = buildCrashInfo(application, whatsAppVersion)
+                    val intent = Intent().apply {
+                        component = ComponentName(
+                            BuildConfig.APPLICATION_ID,
+                            CrashReportActivity::class.java.name
+                        )
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        putExtra(CrashReportActivity.EXTRA_CRASH_INFO, crashInfo)
+                        putExtra(
+                            CrashReportActivity.EXTRA_CRASH_TRACE,
+                            Log.getStackTraceString(throwable)
+                        )
+                    }
+                    application.startActivity(intent)
+                } catch (e: Throwable) {
+                    XposedBridge.log(e)
+                } finally {
+                    if (previousHandler != null) {
+                        previousHandler.uncaughtException(thread, throwable)
+                    } else {
+                        Runtime.getRuntime().exit(2)
+                    }
+                }
+            }
+        }
+
+        private fun buildCrashInfo(application: Application, whatsAppVersion: String): String {
+            val androidVersion = "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
+            val deviceModel = listOf(Build.MANUFACTURER, Build.MODEL)
+                .filter { it.isNotBlank() }
+                .joinToString(" ")
+
+            return listOf(
+                "${application.getString(R.string.whatsapp_version)}: $whatsAppVersion",
+                "${application.getString(R.string.whatsapp_package)}: ${application.packageName}",
+                "${application.getString(R.string.wae_version)}: ${BuildConfig.VERSION_NAME}",
+                "${application.getString(R.string.crash_android_version)}: $androidVersion",
+                "${application.getString(R.string.device_model)}: $deviceModel"
+            ).joinToString("\n")
         }
 
 
@@ -297,56 +401,41 @@ class FeatureLoader {
         }
 
         @Throws(Exception::class)
-        private fun initComponents(loader: ClassLoader, pref: XSharedPreferences) {
+        private fun initComponents(loader: ClassLoader, pref: SharedPreferences) {
             FMessageWpp.initialize(loader)
             FStatusWpp.initialize(loader)
             ProtocolTreeNodeWpp.initialize(loader)
             AlertDialogWpp.initDialog(loader)
             WaContactWpp.initialize(loader)
-            WppCore.Initialize(loader, pref)
+            WppCore.initialize(loader, pref)
             DesignUtils.setPrefs(pref)
-            Utils.init(loader)
+            Utils.init()
 
-            WppCore.addListenerActivity(object : WppCore.ActivityChangeState {
-                override fun onChange(
-                    activity: Activity,
-                    type: WppCore.ActivityChangeState.ChangeType
-                ) {
-                    if (type == WppCore.ActivityChangeState.ChangeType.RESUMED) {
-                        checkUpdate(activity)
-                    }
+            WppCore.addListenerActivity { activity, type ->
+                if (type == WppCore.ActivityChangeState.ChangeType.RESUMED) {
+                    checkUpdate(activity)
+                }
 
-                    if (type == WppCore.ActivityChangeState.ChangeType.CREATED && activity.javaClass.simpleName == "HomeActivity") {
-                        checkPrefsLoad(pref, activity)
-                    }
 
-                    if (App.isOriginalPackage() && pref.getBoolean("update_check", true)) {
-                        if (activity.javaClass.simpleName == "HomeActivity" && type == WppCore.ActivityChangeState.ChangeType.RESUMED) {
-                            if (pref.getBoolean("lite_mode",false)) return
+                if (App.isOriginalPackage && pref.getBoolean("update_check", true)) {
+                    if (activity.javaClass.simpleName == "HomeActivity" && type == WppCore.ActivityChangeState.ChangeType.RESUMED) {
+                        val now = System.currentTimeMillis()
+                        val shouldSchedule = synchronized(FeatureLoader::class.java) {
+                            if (now - lastUpdateCheckScheduledAt < UPDATE_CHECK_COOLDOWN_MS) {
+                                false
+                            } else {
+                                lastUpdateCheckScheduledAt = now
+                                true
+                            }
+                        }
+                        if (shouldSchedule) {
                             activity.window.decorView.postDelayed({
                                 CompletableFuture.runAsync(UpdateChecker(activity))
                             }, 2000)
                         }
                     }
                 }
-
-                private fun checkPrefsLoad(prefs: XSharedPreferences, activity: Activity) {
-                    val fileService = SELinuxHelper.getAppDataFileService()
-                    if (fileService.checkFileExists(prefs.file.absolutePath) &&
-                        !fileService.checkFileAccess(prefs.file.absolutePath, BaseService.R_OK)
-                    ) {
-                        activity.runOnUiThread {
-                            Toast.makeText(
-                                activity,
-                                "[ERROR-PREFS]Unable to read WAE preferences. Contact the Developer",
-                                Toast.LENGTH_LONG
-                            ).show()
-                        }
-                    }
-                }
-
-
-            })
+            }
 
         }
 
@@ -367,7 +456,7 @@ class FeatureLoader {
                         }
                         .setNegativeButton(activity.getString(R.string.no), null)
                         .show()
-                } catch (ignored: Throwable) {
+                } catch (_: Throwable) {
                 }
             }
         }
@@ -439,12 +528,12 @@ class FeatureLoader {
                     setPackage(BuildConfig.APPLICATION_ID)
                 }
                 context.sendBroadcast(wppIntent)
-            } catch (ignored: Exception) {
+            } catch (_: Exception) {
             }
         }
 
         @Throws(Exception::class)
-        private fun plugins(loader: ClassLoader, pref: XSharedPreferences, versionWpp: String) {
+        private fun plugins(loader: ClassLoader, pref: SharedPreferences, versionWpp: String) {
             val classes = arrayOf(
                 DebugFeature::class.java,
                 ContactItemListener::class.java,
@@ -459,6 +548,7 @@ class FeatureLoader {
                 CallPrivacy::class.java,
                 ActivityController::class.java,
                 CustomThemeV2::class.java,
+                FloatingBottomBar::class.java,
                 ChatLimit::class.java,
                 SeparateGroup::class.java,
                 ShowOnline::class.java,
@@ -471,7 +561,6 @@ class FeatureLoader {
                 TagMessage::class.java,
                 HideTabs::class.java,
                 IGStatus::class.java,
-                LiteMode::class.java,
                 MediaQuality::class.java,
                 NewChat::class.java,
                 Others::class.java,
@@ -492,6 +581,7 @@ class FeatureLoader {
                 GroupAdmin::class.java,
                 Stickers::class.java,
                 CopyStatus::class.java,
+                CopySelectionMessage::class.java,
                 TextStatusComposer::class.java,
                 ToastViewer::class.java,
                 MenuHome::class.java,
@@ -499,19 +589,21 @@ class FeatureLoader {
                 CustomPrivacy::class.java,
                 AudioTranscript::class.java,
                 GoogleTranslate::class.java,
-                ContactBlockedVerify::class.java,
+                ContactVerify::class.java,
                 LockedChatsEnhancer::class.java,
                 CallRecording::class.java,
                 BackupRestore::class.java,
-                RecoverDeleteForMe::class.java,
                 JumpFirstMessage::class.java,
-                AboutContactPicker::class.java
+                AboutContactPicker::class.java,
+                DefaultEmoji::class.java
             )
 
             XposedBridge.log("Loading Plugins")
-            val executorService = Executors.newWorkStealingPool(
-                Runtime.getRuntime().availableProcessors().coerceAtMost(4)
-            )
+            val executorService = Executors.newSingleThreadExecutor { runnable ->
+                Thread(runnable, "WAE-HookInstaller").apply {
+                    isDaemon = true
+                }
+            }
             val times = Collections.synchronizedList(ArrayList<String>())
 
             for (clazz in classes) {
@@ -520,7 +612,7 @@ class FeatureLoader {
                     try {
                         val constructor = clazz.getConstructor(
                             ClassLoader::class.java,
-                            XSharedPreferences::class.java
+                            SharedPreferences::class.java
                         )
                         val plugin = constructor.newInstance(loader, pref) as Feature
                         plugin.doHook()
@@ -550,7 +642,8 @@ class FeatureLoader {
             executorService.awaitTermination(15, TimeUnit.SECONDS)
 
             if (Feature.DEBUG) {
-                times.forEach { XposedBridge.log(it) }
+                val loadedTimes = synchronized(times) { times.toList() }
+                loadedTimes.forEach { XposedBridge.log(it) }
             }
         }
     }

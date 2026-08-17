@@ -9,6 +9,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.graphics.drawable.Drawable
 import android.os.Environment
 import android.text.TextUtils
+import android.util.LruCache
 import android.widget.Toast
 import androidx.core.content.edit
 import com.wmods.wppenhacer.R
@@ -23,24 +24,22 @@ import com.wmods.wppenhacer.xposed.core.devkit.UnobfuscatorCache
 import com.wmods.wppenhacer.xposed.utils.ReflectionUtils
 import com.wmods.wppenhacer.xposed.utils.Utils
 import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XSharedPreferences
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
+import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
+import org.luckypray.dexkit.query.enums.StringMatchType
 import java.io.File
 import java.lang.reflect.Field
 import java.lang.reflect.Method
-import java.util.Arrays
 import java.util.Collections
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 
 @SuppressLint("StaticFieldLeak")
+@Suppress("UNUSED")
 object WppCore {
-
-
     @JvmStatic
-    val listenerActivity = ConcurrentHashMap.newKeySet<ActivityChangeState>()
+    val listenerActivity: ConcurrentHashMap.KeySetView<ActivityChangeState, Boolean> = ConcurrentHashMap.newKeySet<ActivityChangeState>()
 
     @JvmField
     internal var mCurrentActivity: Activity? = null
@@ -50,7 +49,9 @@ object WppCore {
     private lateinit var privPrefs: SharedPreferences
     private var mStartUpConfig: Any? = null
     private var mActionUser: Any? = null
+    @Volatile
     private var mWaDatabase: SQLiteDatabase? = null
+    private val contactNameCache = LruCache<String, String>(200)
 
     /** Connection WhatsApp itself uses for wa.db, captured by FeatureLoader. */
     @JvmField
@@ -75,8 +76,8 @@ object WppCore {
 
     @JvmStatic
     @Throws(Exception::class)
-    fun Initialize(loader: ClassLoader, pref: XSharedPreferences) {
-        privPrefs = Utils.getApplication().getSharedPreferences("WaGlobal", Context.MODE_PRIVATE)
+    fun initialize(loader: ClassLoader, pref: SharedPreferences) {
+        privPrefs = Utils.application.getSharedPreferences("WaGlobal", Context.MODE_PRIVATE)
 
         // init UserJID
         val companionField = FMessageWpp.UserJid.TYPE_JID.getDeclaredField("Companion")
@@ -152,9 +153,7 @@ object WppCore {
         loadWADatabase()
         hookStatusToMessageMapper(loader)
 
-        if (!pref.getBoolean("lite_mode", false)) {
-            initBridge(Utils.getApplication())
-        }
+        initBridge(Utils.application)
     }
 
     private fun hookStatusToMessageMapper(loader: ClassLoader) {
@@ -201,53 +200,39 @@ object WppCore {
         return userJid
     }
 
-    @JvmStatic
-    @Throws(Exception::class)
     fun initBridge(context: Context) {
         val prefsCacheHooks = UnobfuscatorCache.getInstance().sPrefsCacheHooks
-        var preferredOrder = prefsCacheHooks.getInt(
-            "preferredOrder",
-            1
-        ) // 0 for ProviderClient first, 1 for BridgeClient first
+        val preferredOrder = prefsCacheHooks.getInt("preferredOrder", 1)
 
-        var connected = false
-        if (preferredOrder == 0) {
-            if (tryConnectBridge(ProviderClientKt(context))) {
-                connected = true
-            } else if (tryConnectBridge(BridgeClientKt(context))) {
-                connected = true
-                preferredOrder = 1 // Update preference to BridgeClient first
-            }
-        } else {
-            if (tryConnectBridge(BridgeClientKt(context))) {
-                connected = true
-            } else if (tryConnectBridge(ProviderClientKt(context))) {
-                connected = true
-                preferredOrder = 0 // Update preference to ProviderClient first
-            }
+        val primaryClient =
+            if (preferredOrder == 0) ProviderClientKt() else BridgeClientKt(context)
+        val fallbackClient =
+            if (preferredOrder == 0) BridgeClientKt(context) else ProviderClientKt()
+
+        if (tryConnectBridge(primaryClient)) return
+
+        if (tryConnectBridge(fallbackClient)) {
+            val newPreferredOrder = if (preferredOrder == 0) 1 else 0
+            prefsCacheHooks.edit { putInt("preferredOrder", newPreferredOrder) }
+            return
         }
-
-        if (!connected) {
-            throw Exception(context.getString(R.string.bridge_error))
-        }
-
-        // Update the preferred order if it changed
-        prefsCacheHooks.edit { putInt("preferredOrder", preferredOrder) }
+        throw Exception(context.getString(R.string.bridge_error))
     }
 
     @JvmStatic
     @Throws(Exception::class)
     private fun tryConnectBridge(baseClient: BaseClient): Boolean {
-        try {
+        return try {
             XposedBridge.log("Trying to connect to ${baseClient.javaClass.simpleName}")
             client = baseClient
-            val canLoadFuture: CompletableFuture<Boolean> = baseClient.connect()
-            val canLoad = canLoadFuture.get()
-            if (!canLoad) throw Exception()
+           runBlocking {
+                val canLoad = baseClient.connect()
+                if (!canLoad) throw Exception()
+                true
+            }
         } catch (_: Exception) {
-            return false
+            false
         }
-        return true
     }
 
     @JvmStatic
@@ -290,9 +275,12 @@ object WppCore {
     fun sendReaction(s: String, objMessage: Any?) {
         try {
             val senderMethod = ReflectionUtils.findMethodUsingFilter(actionUser) { method ->
-                method.parameterCount == 3 && Arrays.equals(
-                    method.parameterTypes,
-                    arrayOf(FMessageWpp.TYPE, String::class.java, Boolean::class.javaPrimitiveType)
+                method.parameterCount == 3 && method.parameterTypes.contentEquals(
+                    arrayOf(
+                        FMessageWpp.TYPE,
+                        String::class.java,
+                        Boolean::class.javaPrimitiveType
+                    )
                 )
             }
             senderMethod.invoke(getActionUser(), objMessage, s, !TextUtils.isEmpty(s))
@@ -315,6 +303,7 @@ object WppCore {
     }
 
     @JvmStatic
+    @Synchronized
     fun loadWADatabase() {
         if (mWaDatabase != null) return
         val captured = whatsappWaDatabase
@@ -322,7 +311,7 @@ object WppCore {
             mWaDatabase = captured
             return
         }
-        val dataDir = Utils.getApplication().filesDir.parentFile
+        val dataDir = Utils.application.filesDir.parentFile
         val database = File(dataDir, "databases/wa.db")
         if (database.exists()) {
             try {
@@ -344,92 +333,32 @@ object WppCore {
         return mCurrentActivity
     }
 
-    @JvmStatic
-    @Synchronized
-    fun getHomeActivityClass(loader: ClassLoader): Class<*> {
-        val oldHomeClass = XposedHelpers.findClassIfExists("com.whatsapp.HomeActivity", loader)
-        return oldHomeClass ?: XposedHelpers.findClass("com.whatsapp.home.ui.HomeActivity", loader)
+    val homeActivityClass: Class<*> by lazy {
+        Unobfuscator.findFirstClassUsingName(Utils.appClassLoader, StringMatchType.EndsWith,".HomeActivity")
     }
 
-    @JvmStatic
-    @Synchronized
-    fun getTabsPagerClass(loader: ClassLoader): Class<*> {
-        val oldHomeClass = XposedHelpers.findClassIfExists("com.whatsapp.TabsPager", loader)
-        return oldHomeClass ?: XposedHelpers.findClass("com.whatsapp.home.ui.TabsPager", loader)
+    val tabsPagerClass: Class<*> by lazy {
+        Unobfuscator.findFirstClassUsingName(Utils.appClassLoader, StringMatchType.EndsWith,".TabsPager")
     }
 
-    @JvmStatic
-    @Synchronized
-    fun getViewOnceViewerActivityClass(loader: ClassLoader): Class<*> {
-        val oldClass =
-            XposedHelpers.findClassIfExists("com.whatsapp.messaging.ViewOnceViewerActivity", loader)
-        return oldClass ?: XposedHelpers.findClass(
-            "com.whatsapp.viewonce.ui.messaging.ViewOnceViewerActivity",
-            loader
-        )
+    val viewOnceViewerActivityClass: Class<*> by lazy {
+        Unobfuscator.findFirstClassUsingName(Utils.appClassLoader, StringMatchType.EndsWith,".ViewOnceViewerActivity")
     }
 
-    @JvmStatic
-    @Synchronized
-    fun getAboutActivityClass(loader: ClassLoader): Class<*> {
-        val oldClass = XposedHelpers.findClassIfExists("com.whatsapp.settings.About", loader)
-        return oldClass ?: XposedHelpers.findClass("com.whatsapp.settings.ui.About", loader)
+    val aboutActivityClass: Class<*> by lazy {
+        Unobfuscator.findFirstClassUsingName(Utils.appClassLoader, StringMatchType.EndsWith,".About")
     }
 
-    @JvmStatic
-    @Synchronized
-    fun getDataUsageActivityClass(loader: ClassLoader): Class<*> {
-        val oldClass = XposedHelpers.findClassIfExists(
-            "com.whatsapp.settings.SettingsDataUsageActivity",
-            loader
-        )
-        return oldClass
-            ?: XposedHelpers.findClass("com.whatsapp.settings.ui.SettingsDataUsageActivity", loader)
+    val dataUsageActivityClass: Class<*> by lazy {
+        Unobfuscator.findFirstClassUsingName(Utils.appClassLoader, StringMatchType.EndsWith,".SettingsDataUsageActivity")
     }
 
-    @JvmStatic
-    @Synchronized
-    @Throws(Exception::class)
-    fun getTextStatusComposerFragmentClass(loader: ClassLoader): Class<*> {
-        val classes = arrayOf(
-            "com.whatsapp.status.composer.TextStatusComposerFragment",
-            "com.whatsapp.statuscomposer.composer.TextStatusComposerFragment"
-        )
-        for (clazz in classes) {
-            val result = XposedHelpers.findClassIfExists(clazz, loader)
-            if (result != null) return result
-        }
-        throw Exception("TextStatusComposerFragmentClass not found")
+    val voipManagerClass: Class<*> by lazy {
+        Unobfuscator.findFirstClassUsingName(Utils.appClassLoader, StringMatchType.EndsWith,".Voip")
     }
 
-    @JvmStatic
-    @Synchronized
-    @Throws(Exception::class)
-    fun getVoipManagerClass(loader: ClassLoader): Class<*> {
-        val classes = arrayOf(
-            "com.whatsapp.voipcalling.Voip",
-            "com.whatsapp.calling.voipcalling.Voip"
-        )
-        for (clazz in classes) {
-            val result = XposedHelpers.findClassIfExists(clazz, loader)
-            if (result != null) return result
-        }
-        throw Exception("VoipManagerClass not found")
-    }
-
-    @JvmStatic
-    @Synchronized
-    @Throws(Exception::class)
-    fun getVoipCallInfoClass(loader: ClassLoader): Class<*> {
-        val classes = arrayOf(
-            "com.whatsapp.voipcalling.CallInfo",
-            "com.whatsapp.calling.infra.voipcalling.CallInfo"
-        )
-        for (clazz in classes) {
-            val result = XposedHelpers.findClassIfExists(clazz, loader)
-            if (result != null) return result
-        }
-        throw Exception("VoipCallInfoClass not found")
+    val voipCallInfoClass: Class<*> by lazy {
+        Unobfuscator.findFirstClassUsingName(Utils.appClassLoader, StringMatchType.EndsWith,".CallInfo")
     }
 
     @JvmStatic
@@ -445,7 +374,7 @@ object WppCore {
             }
         }
         val startupPrefs =
-            Utils.getApplication().getSharedPreferences("startup_prefs", Context.MODE_PRIVATE)
+            Utils.application.getSharedPreferences("startup_prefs", Context.MODE_PRIVATE)
         return startupPrefs.getInt("night_mode", 0)
     }
 
@@ -453,9 +382,13 @@ object WppCore {
     fun getContactName(userJid: FMessageWpp.UserJid): String {
         loadWADatabase()
         if (mWaDatabase == null || userJid.isNull) return "Whatsapp Contact"
+        val rawJid = userJid.phoneRawString ?: return "Whatsapp Contact"
+        contactNameCache.get(rawJid)?.let { return it }
+
         val name = getSContactName(userJid, false)
-        if (!TextUtils.isEmpty(name)) return name
-        return getWppContactName(userJid)
+        val result = if (!TextUtils.isEmpty(name)) name else getWppContactName(userJid)
+        contactNameCache.put(rawJid, result)
+        return result
     }
 
     @JvmStatic
@@ -465,13 +398,13 @@ object WppCore {
         val selection = if (saveOnly) "jid = ? AND raw_contact_id > 0" else "jid = ?"
         var name: String? = null
         val rawJid = userJid.phoneRawString
-        val cursor = mWaDatabase?.query(
+        mWaDatabase?.query(
             "wa_contacts", arrayOf("display_name"), selection,
             arrayOf(rawJid), null, null, null
-        )
-        if (cursor != null && cursor.moveToFirst()) {
-            name = cursor.getString(0)
-            cursor.close()
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                name = cursor.getString(0)
+            }
         }
         return name ?: ""
     }
@@ -482,13 +415,13 @@ object WppCore {
         if (mWaDatabase == null || userJid.isNull) return ""
         var name: String? = null
         val rawJid = userJid.phoneRawString
-        val cursor2 = mWaDatabase?.query(
+        mWaDatabase?.query(
             "wa_vnames", arrayOf("verified_name"), "jid = ?",
             arrayOf(rawJid), null, null, null
-        )
-        if (cursor2 != null && cursor2.moveToFirst()) {
-            name = cursor2.getString(0)
-            cursor2.close()
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                name = cursor.getString(0)
+            }
         }
         return name ?: ""
     }
@@ -560,14 +493,14 @@ object WppCore {
     @JvmStatic
     fun getMyName(): String {
         val startupPrefs =
-            Utils.getApplication().getSharedPreferences("startup_prefs", Context.MODE_PRIVATE)
+            Utils.application.getSharedPreferences("startup_prefs", Context.MODE_PRIVATE)
         return startupPrefs.getString("push_name", "WhatsApp") ?: "WhatsApp"
     }
 
     @JvmStatic
     fun getMainPrefs(): SharedPreferences {
-        return Utils.getApplication().getSharedPreferences(
-            "${Utils.getApplication().packageName}_preferences_light", Context.MODE_PRIVATE
+        return Utils.application.getSharedPreferences(
+            "${Utils.application.packageName}_preferences_light", Context.MODE_PRIVATE
         )
     }
 
@@ -583,7 +516,7 @@ object WppCore {
 
     @JvmStatic
     fun getMyPhoto(): Drawable? {
-        val datafolder = Utils.getApplication().cacheDir.parentFile
+        val datafolder = Utils.application.cacheDir.parentFile
         val file = File(datafolder, "files/me.jpg")
         if (file.exists()) return Drawable.createFromPath(file.absolutePath)
         return null
@@ -602,8 +535,7 @@ object WppCore {
                 XposedHelpers.findClass("com.whatsapp.Conversation", mCurrentActivity!!.classLoader)
             if (conversation.isInstance(mCurrentActivity)) return mCurrentActivity
 
-            val home = getHomeActivityClass(mCurrentActivity!!.classLoader)
-            if (mCurrentActivity!!.resources.configuration.smallestScreenWidthDp >= 600 && home.isInstance(
+            if (mCurrentActivity!!.resources.configuration.smallestScreenWidthDp >= 600 && homeActivityClass.isInstance(
                     mCurrentActivity
                 )
             ) {
@@ -639,7 +571,7 @@ object WppCore {
             ) {
                 return activityTitle.toString()
             }
-        } catch (t: Throwable) {
+        } catch (_: Throwable) {
         }
         return null
     }
@@ -660,18 +592,18 @@ object WppCore {
     }
 
     @JvmStatic
-    fun getPrivJSON(key: String, defaultValue: JSONObject?): JSONObject? {
+    fun getPrivJSON(key: String, defaultValue: JSONObject): JSONObject {
         val jsonStr = privPrefs.getString(key, null) ?: return defaultValue
         return try {
             JSONObject(jsonStr)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             defaultValue
         }
     }
 
     @JvmStatic
-    fun setPrivJSON(key: String, value: JSONObject?) {
-        privPrefs.edit(commit = true) { putString(key, value?.toString()) }
+    fun setPrivJSON(key: String, value: JSONObject) {
+        privPrefs.edit(commit = true) { putString(key, value.toString()) }
     }
 
     @SuppressLint("ApplySharedPref")
@@ -737,9 +669,9 @@ object WppCore {
 
     @JvmStatic
     fun getRootWhatsAppDir(): File {
-        val mediaDirs = Utils.getApplication().externalMediaDirs
+        val mediaDirs = Utils.application.externalMediaDirs
         val appName =
-            Utils.getApplication().packageManager.getApplicationLabel(Utils.getApplication().applicationInfo)
+            Utils.application.packageManager.getApplicationLabel(Utils.application.applicationInfo)
         if (mediaDirs.isNotEmpty()) {
             val rootDir = File(mediaDirs[0], appName.toString())
             if (rootDir.exists()) return rootDir
@@ -782,11 +714,11 @@ object WppCore {
         return mWaDatabase
     }
 
-    interface ActivityChangeState {
+    fun interface ActivityChangeState {
         fun onChange(activity: Activity, type: ChangeType)
 
         enum class ChangeType {
-            CREATED, STARTED, ENDED, RESUMED, PAUSED
+            CREATED, STARTED, ENDED, RESUMED, PAUSED,DESTROYED;
         }
     }
 }

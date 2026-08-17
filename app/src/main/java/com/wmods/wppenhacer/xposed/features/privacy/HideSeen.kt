@@ -1,5 +1,6 @@
 package com.wmods.wppenhacer.xposed.features.privacy
 
+import android.os.Handler
 import android.os.Message
 import androidx.room.concurrent.ThreadLocal
 import com.wmods.wppenhacer.xposed.core.Feature
@@ -8,14 +9,16 @@ import com.wmods.wppenhacer.xposed.core.components.FMessageWpp
 import com.wmods.wppenhacer.xposed.core.components.ProtocolTreeNodeWpp
 import com.wmods.wppenhacer.xposed.core.db.MessageHistoryStore
 import com.wmods.wppenhacer.xposed.core.devkit.Unobfuscator
+import com.wmods.wppenhacer.xposed.features.general.Others
+import com.wmods.wppenhacer.xposed.utils.ReflectionUtils
 import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XSharedPreferences
+import android.content.SharedPreferences 
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import org.json.JSONObject
 import org.luckypray.dexkit.query.enums.StringMatchType
 
-class HideSeen(loader: ClassLoader, preferences: XSharedPreferences) :
+class HideSeen(loader: ClassLoader, preferences:SharedPreferences) :
     Feature(loader, preferences) {
 
     companion object {
@@ -131,41 +134,56 @@ class HideSeen(loader: ClassLoader, preferences: XSharedPreferences) :
     private fun recordHiddenMessages(sendReadReceiptJob: Any, userJid: FMessageWpp.UserJid) {
         val messageIds =
             XposedHelpers.getObjectField(sendReadReceiptJob, "messageIds") as? Array<*> ?: return
-        for (messageId in messageIds) {
-            MessageHistoryStore.getInstance().insertHideSeenMessage(
-                userJid.phoneRawString,
-                messageId as String?,
-                MessageHistoryStore.ReceiptType.READ,
-                false
-            )
-        }
+        val ids = messageIds.mapNotNull { it as? String }
+        if (ids.isEmpty()) return
+        MessageHistoryStore.getInstance().insertHideSeenMessagesAsync(
+            userJid.phoneRawString,
+            ids,
+            MessageHistoryStore.ReceiptType.READ,
+            false
+        )
     }
 
     private fun hookReceiptMethod() {
 
         val receiptMethod = Unobfuscator.loadReceiptMethod(classLoader)
-        val receiptMainCallerMethod = Unobfuscator.loadReceiptMainCallerMethod(classLoader);
-        val receiptCallerMethods = Unobfuscator.loadReceiptCallersMethod(classLoader);
+        val receiptMessageInfoClass = Unobfuscator.loadReceiptMessageInfoClass(classLoader)
+        val onDispatchMessage = Unobfuscator.loadOndispatchMessage(classLoader)
 
-        val inManualReceiptCheck = ThreadLocal<Boolean>();
+        onDispatchMessage.forEach { method ->
+            XposedBridge.hookMethod(
+                method,
+                object : XC_MethodHook() {
 
-        val hookCallerMethod = object : XC_MethodHook(){
-            override fun beforeHookedMethod(param: MethodHookParam) {
-                val firstArg = param.args[0] as? Message ?: return
-                if (firstArg.arg1 != 419 && firstArg.arg1 != 89)return
-                val obj = firstArg.obj
-                inManualReceiptCheck.set(true)
-                val checkResult = try {
-                    receiptMainCallerMethod.invoke(null, obj);
-                }finally {
-                    inManualReceiptCheck.set(false)
-                }
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        val message = param.args[0] as Message
+                        val type = message.arg1
+                        val obj = message.obj
+                        if (type != 419 && type != 89) return
+                        if (!receiptMessageInfoClass.isInstance(obj)) return
+                        // We check if the message is duplicated to avoid sending a tick twice causing congestion in the IQ queue
+                        val fmessageKeyField = ReflectionUtils.findFieldUsingFilter(obj.javaClass){
+                            FMessageWpp.Key.TYPE.isAssignableFrom(it.type)
+                        }
+                        val fmessageKey = FMessageWpp.Key(fmessageKeyField.get(obj))
+                        val hideSeenItem = MessageHistoryStore.getInstance().getHideSeenMessage(
+                            fmessageKey.remoteJid.phoneRawString,
+                            fmessageKey.messageID,
+                            MessageHistoryStore.ReceiptType.READ
+                        )
 
-                if (checkResult == null)
-                    param.result = null;
-            }
+                        if (hideSeenItem?.viewed ?: false) return
+
+                        hideSeenItem?.let {
+                            message.arg1 = -1 // We change the type [IMPORTANT]IA Agent use 9 for best work[/IMPORTANT]
+                            return
+                        }
+                    }
+                })
         }
-        receiptCallerMethods.forEach { XposedBridge.hookMethod(it, hookCallerMethod) }
+
+
+        Others.propsBoolean[19148] = false // Change route IQ
 
         XposedBridge.hookMethod(receiptMethod, object : XC_MethodHook() {
 
@@ -179,6 +197,8 @@ class HideSeen(loader: ClassLoader, preferences: XSharedPreferences) :
 
                 val fmessageKey = generateFMessageKey(protocolTreeNodeWpp) ?: return
 
+                if (fmessageKey.remoteJid.isStatus)return
+
                 val hideSeenItem = MessageHistoryStore.getInstance().getHideSeenMessage(
                     fmessageKey.remoteJid.phoneRawString,
                     fmessageKey.messageID,
@@ -187,15 +207,8 @@ class HideSeen(loader: ClassLoader, preferences: XSharedPreferences) :
 
                 if (hideSeenItem?.viewed ?: false) return
 
-                hideSeenItem?.let {
-                    param.result = null
-                    return
-                }
-
                 val hideSeen = checkPrivacyAndHideSeen(fmessageKey)
                 val hideReceipt = checkPrivacyAndHideReceipt(fmessageKey)
-
-                var isHide = false
 
                 if (hideReceipt) {
                     if (typeKV == null) {
@@ -204,17 +217,13 @@ class HideSeen(loader: ClassLoader, preferences: XSharedPreferences) :
                         typeKV.value = "inactive"
                     }
                     protocolTreeNodeWpp.removeAllKeyValuesByKey("sts")
-                    isHide = true
                 } else if (hideSeen && typeKV?.value == "read") {
                     protocolTreeNodeWpp.removeAllKeyValuesByKey("sts")
                     protocolTreeNodeWpp.removeAllKeyValuesByKey("type")
-                    isHide = true
                 }
 
-                if (inManualReceiptCheck.get() ?: false)return
-
-                if (isHide) {
-                    MessageHistoryStore.getInstance().insertHideSeenMessage(
+                if (hideReceipt || hideSeen) {
+            MessageHistoryStore.getInstance().insertHideSeenMessageAsync(
                         fmessageKey.remoteJid.phoneRawString,
                         fmessageKey.messageID,
                         MessageHistoryStore.ReceiptType.READ,
@@ -271,7 +280,7 @@ class HideSeen(loader: ClassLoader, preferences: XSharedPreferences) :
 
         if (isHideViewOnce || isHideVoiceNote) {
             param.result = null
-            MessageHistoryStore.getInstance().insertHideSeenMessage(
+            MessageHistoryStore.getInstance().insertHideSeenMessageAsync(
                 key.remoteJid.phoneRawString,
                 key.messageID,
                 MessageHistoryStore.ReceiptType.PLAYED,
@@ -283,13 +292,13 @@ class HideSeen(loader: ClassLoader, preferences: XSharedPreferences) :
             val phoneRaw = key.remoteJid.phoneRawString
             val messageId = key.messageID
             MessageHistoryStore.getInstance().apply {
-                updateViewedMessage(
+                updateViewedMessageAsync(
                     phoneRaw,
                     messageId,
                     MessageHistoryStore.ReceiptType.PLAYED,
                     true
                 )
-                updateViewedMessage(phoneRaw, messageId, MessageHistoryStore.ReceiptType.READ, true)
+                updateViewedMessageAsync(phoneRaw, messageId, MessageHistoryStore.ReceiptType.READ, true)
             }
         }
     }

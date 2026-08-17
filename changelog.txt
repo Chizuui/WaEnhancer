@@ -1,10 +1,8 @@
 [ADDED]
-* Added new call blocking type: Busy (On another call).
-
-[REMOVED]
-* Removed the "Rejected" type call blocking, it was not working.
+* Added support for WA/WB 2.26.31.xx
+* Added option to disable swipe Up to conversation in groups (WAE -> General -> Conversation)
 
 [FIXED]
-* Fixed the Settings icon with profile photo on the home screen (now the camera button also appears)
-* Fixed problem with call blocker for unknown numbers
-* Fixed the logic to hide the ticks
+* Fixed bug in IGStatus that appeared on the screen Archived and blocked
+* Fixed bug in the delete status button (for me)
+* Fixed bug in the function of disabling filters on the screen (Now the blocked chats button remains visible)

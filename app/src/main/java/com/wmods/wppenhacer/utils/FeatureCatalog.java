@@ -82,14 +82,6 @@ public class FeatureCatalog {
                 "general_home",
                 Arrays.asList("backup", "restore", "force")));
 
-        catalog.add(new SearchableFeature("lite_mode",
-                context.getString(R.string.lite_mode),
-                context.getString(R.string.lite_mode_sum),
-                SearchableFeature.Category.GENERAL_HOME,
-                SearchableFeature.FragmentType.GENERAL,
-                "general_home",
-                Arrays.asList("lite", "performance", "battery")));
-
         catalog.add(new SearchableFeature("force_english",
                 context.getString(R.string.force_english),
                 null,
@@ -436,21 +428,13 @@ public class FeatureCatalog {
                 "conversation",
                 Arrays.asList("translate", "google", "language")));
 
-        catalog.add(new SearchableFeature("deleted_messages_activity",
-                context.getString(R.string.deleted_messages_title),
-                context.getString(R.string.deleted_messages_sum),
-                SearchableFeature.Category.GENERAL_CONVERSATION,
-                SearchableFeature.FragmentType.ACTIVITY,
-                null,
-                Arrays.asList("deleted", "messages", "restore", "history", "log")));
-
         catalog.add(new SearchableFeature("verify_blocked_contact",
-                context.getString(R.string.show_contact_blocked),
-                context.getString(R.string.show_contact_blocked_sum),
+                context.getString(R.string.show_contact_added_status),
+                context.getString(R.string.show_contact_added_status_sum),
                 SearchableFeature.Category.GENERAL_CONVERSATION,
                 SearchableFeature.FragmentType.GENERAL,
                 "conversation",
-                Arrays.asList("blocked", "contact", "verify")));
+                Arrays.asList("added", "contact", "verify")));
 
         // GENERAL FRAGMENT - Status
         catalog.add(new SearchableFeature("autonext_status",

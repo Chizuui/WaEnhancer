@@ -2,11 +2,26 @@
 
 # WaEnhancer
 <div align="center">
-  <p><strong>WaEnhancer is an Xposed module that enhances your WhatsApp experience.</p></strong>
+  <p><strong>WaEnhancer is an Xposed module that enhances your WhatsApp experience.</strong></p>
   <p><strong>Warning:</strong> This module is intended for educational purposes only, you may have problems with your WhatsApp account, risk of banning! Use it at your own risk.</p>
   <p>Please note that this project is currently in development, so bugs and crashes may occur. If you encounter any issues report them in our group or create an <a href="https://github.com/Dev4Mod/WaEnhancer/issues">issue</a> here.</p>
 </div>
 
+---
+
+## Legal Disclaimer & Project Scope
+
+To avoid any misunderstanding regarding the nature, goals, and scope of this project, we explicitly state that:
+
+*   **Zero Proprietary Code:** This repository **DOES NOT** contain, host, or distribute any source code belonging to WhatsApp Inc., Meta Platforms, Inc., or any of their affiliates.
+*   **No APK Distribution:** We **DO NOT** distribute, host, or provide links to modified WhatsApp binary files (APKs). The APKs generated in the GitHub Actions tab are strictly the Xposed module itself, not a messaging application.
+*   **No Piracy or Bypasses:** WaEnhancer **DOES NOT** bypass premium accounts or subscriptions, does not unlock paid features illegally, and does not facilitate any form of piracy.
+*   **Security and Integrity:** This project **DOES NOT** provide tools to break, bypass, or weaken the encryption, security, or server infrastructure of WhatsApp.
+*   **User Responsibility:** This is an educational research project. The use of this tool is entirely at the end user's own risk. We are not responsible for any account bans or violations of third-party Terms of Service that the user may commit when using modifications on their own device.
+
+All modifications are made dynamically in the memory of the user's own device through the Xposed framework, without tampering with the original application package.
+
+---
 
 ## Main Features
 <details closed>
@@ -150,8 +165,11 @@
 ## Support
 If you encounter any issues or have questions about WaEnhancer, please [Visit Telegram](https://t.me/waenhancer).
 
-## License
-This project is licensed under the GNU License - see the [LICENSE](LICENSE) file for details.
+## License & Copyright Warning
+This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)** - see the [LICENSE](LICENSE) file for details.
+
+**Important Notice for Forks and Derivative Works:**
+This is a strong copyleft open-source license. Any derivative works, forks, or software compiled together with this codebase (including via Git submodules) **must** also be open-source and distributed under the exact same GPL-3.0 license terms. Attempting to use this code to create proprietary, closed-source, or commercialized modifications without releasing the full source code is a direct violation of copyright and the GPL-3.0 terms.
 
 ## Thanks
 
@@ -162,3 +180,13 @@ This project is licensed under the GNU License - see the [LICENSE](LICENSE) file
 ---
 
 **Note**: Please use WaEnhancer responsibly and in compliance with the terms and conditions of the apps you are modifying. Misuse of this tool may lead to legal consequences.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=Dev4Mod%2FWaEnhancer&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Dev4Mod/WaEnhancer&type=date&theme=dark&legend=top-left&sealed_token=b1vTkmTYcAchBg96D5ulWNcOZFMvWeja0ogdKKalbAhLtvENQuovfDbpmDQZtMgFuxyeRseQRD6nPsU9tgT5vGKWbU_1OHCsXyFPoRSDwMChEZVMCkQ14dI5m6rSPZ-iMzp_4VSp_7J5CLtEOUKP_1b2e7vbNLGh98-LMTBjsY8w3-YgoaZSDzwxzS4u" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Dev4Mod/WaEnhancer&type=date&legend=top-left&sealed_token=b1vTkmTYcAchBg96D5ulWNcOZFMvWeja0ogdKKalbAhLtvENQuovfDbpmDQZtMgFuxyeRseQRD6nPsU9tgT5vGKWbU_1OHCsXyFPoRSDwMChEZVMCkQ14dI5m6rSPZ-iMzp_4VSp_7J5CLtEOUKP_1b2e7vbNLGh98-LMTBjsY8w3-YgoaZSDzwxzS4u" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Dev4Mod/WaEnhancer&type=date&legend=top-left&sealed_token=b1vTkmTYcAchBg96D5ulWNcOZFMvWeja0ogdKKalbAhLtvENQuovfDbpmDQZtMgFuxyeRseQRD6nPsU9tgT5vGKWbU_1OHCsXyFPoRSDwMChEZVMCkQ14dI5m6rSPZ-iMzp_4VSp_7J5CLtEOUKP_1b2e7vbNLGh98-LMTBjsY8w3-YgoaZSDzwxzS4u" />
+ </picture>
+</a>

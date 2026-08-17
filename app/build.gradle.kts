@@ -1,33 +1,26 @@
+import com.android.build.api.variant.impl.VariantOutputImpl
+import com.android.build.gradle.internal.api.BaseVariantOutputImpl
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-import java.io.FileInputStream
 import java.util.Locale
-import java.util.Properties
+import kotlin.time.Duration.Companion.milliseconds
 
 plugins {
     alias(libs.plugins.androidApplication)
-    alias(libs.plugins.materialthemebuilder)
-    alias(libs.plugins.kotlinAndroid)
     alias(libs.plugins.kspPlugin)
 }
 
-fun getGitHashCommit(): String {
-    return try {
-        val processBuilder = ProcessBuilder("git", "rev-parse", "--short", "HEAD")
-        val process = processBuilder.start()
-        process.inputStream.bufferedReader().readText().trim()
-    } catch (e: Exception) {
-        "unknown"
-    }
-}
-
-val gitHash: String = getGitHashCommit().uppercase(Locale.getDefault())
+val gitHash: String = providers.exec {
+    commandLine("git", "rev-parse", "HEAD")
+    isIgnoreExitValue = true
+}.standardOutput.asText.map { it.trim().uppercase(Locale.getDefault()).substring(0,8) }.getOrElse("UNKNOWN")
 
 android {
     namespace = "com.wmods.wppenhacer"
-    compileSdk = 36
-    ndkVersion = "27.0.11902837 rc2"
+    //noinspection GradleDependency
+    compileSdk = 37
+    ndkVersion = "28.2.13676358"
 
     flavorDimensions += "version"
 
@@ -35,6 +28,7 @@ android {
         create("whatsapp") {
             dimension = "version"
             applicationIdSuffix = ""
+            isDefault = true
         }
         create("business") {
             dimension = "version"
@@ -46,40 +40,30 @@ android {
     defaultConfig {
         applicationId = "com.wmods.wppenhacer"
         minSdk = 28
+        //noinspection OldTargetApi
         targetSdk = 34
         versionCode = 154
-        versionName = "1.5.4-DEV ($gitHash)"
+        versionName = "1.5.5 ($gitHash)"
         multiDexEnabled = true
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         signingConfigs.create("config") {
-            val keystorePropertiesFile = rootProject.file("local.properties")
-            val keystoreProperties = Properties()
-            if (keystorePropertiesFile.exists()) {
-                keystoreProperties.load(FileInputStream(keystorePropertiesFile))
-            }
-
             val androidStoreFile = project.findProperty("androidStoreFile") as String?
-                ?: keystoreProperties.getProperty("androidStoreFile")
-
             if (!androidStoreFile.isNullOrEmpty()) {
                 storeFile = rootProject.file(androidStoreFile)
-                storePassword = project.findProperty("androidStorePassword") as String?
-                    ?: keystoreProperties.getProperty("androidStorePassword")
-                keyAlias = project.findProperty("androidKeyAlias") as String?
-                    ?: keystoreProperties.getProperty("androidKeyAlias")
-                keyPassword = project.findProperty("androidKeyPassword") as String?
-                    ?: keystoreProperties.getProperty("androidKeyPassword")
+                storePassword = project.property("androidStorePassword") as String
+                keyAlias = project.property("androidKeyAlias") as String
+                keyPassword = project.property("androidKeyPassword") as String
             }
         }
 
         ndk {
             abiFilters.add("armeabi-v7a")
             abiFilters.add("arm64-v8a")
-            abiFilters.add("x86_64")
-            abiFilters.add("x86")
         }
+
+        buildConfigField("Boolean", "RESET_ON_INSTALL", "false")
 
     }
 
@@ -92,24 +76,39 @@ android {
             excludes += "**.properties"
             excludes += "**.bin"
         }
+
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     buildTypes {
-        all {
+
+        debug {
+            isMinifyEnabled = project.hasProperty("minify") && project.findProperty("minify").toString().toBoolean()
+            //noinspection NotShrinkingResources
+            isShrinkResources = false
             signingConfig =
                 if (signingConfigs["config"].storeFile != null) signingConfigs["config"] else signingConfigs["debug"]
-            if (project.hasProperty("minify") && project.properties["minify"].toString()
-                    .toBoolean()
-            ) {
-                isMinifyEnabled = true
-                proguardFiles(
-                    getDefaultProguardFile("proguard-android-optimize.txt"),
-                    "proguard-rules.pro"
-                )
-            }
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
+
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            //noinspection NotShrinkingResources
+            isShrinkResources = false
+            signingConfig =
+                if (signingConfigs["config"].storeFile != null) signingConfigs["config"] else signingConfigs["debug"]
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -130,31 +129,21 @@ android {
 
     lint {
         disable += "SelectedPhotoAccess"
+        baseline = file("lint-baseline.xml")
     }
 
-    materialThemeBuilder {
-        themes {
-            for ((name, color) in listOf(
-                "Green" to "4FAF50",
-                "Blue" to "3B82F6",
-                "Cyan" to "06B6D4",
-                "Purple" to "8B5CF6",
-                "Orange" to "F97316",
-                "Red" to "EF4444",
-                "Pink" to "EC4899"
-            )) {
-                create("Material$name") {
-                    lightThemeFormat = "ThemeOverlay.Light.%s"
-                    darkThemeFormat = "ThemeOverlay.Dark.%s"
-                    primaryColor = "#$color"
-                }
-            }
+}
+
+androidComponents {
+    onVariants { variant ->
+        val appName = when (variant.flavorName) {
+            "business" -> "WaEnhancer-Business"
+            else -> "WaEnhancer"
         }
-        // Add Material Design 3 color tokens (such as palettePrimary100) in generated theme
-        // rikka.material >= 2.0.0 provides such attributes
-        generatePalette = true
+        variant.outputs.forEach { output ->
+            (output as VariantOutputImpl).outputFileName.set("$appName-1.5.5 ($gitHash).apk")
+        }
     }
-
 }
 
 kotlin {
@@ -170,12 +159,14 @@ dependencies {
     compileOnly(libs.libxposed.legacy)
     ksp(libs.androidx.room.compiler)
 
+    implementation(libs.core)
     implementation(libs.androidx.activity)
     implementation(libs.androidx.documentfile)
     implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.fragment)
     implementation(libs.androidx.navigation.fragment)
     implementation(libs.androidx.navigation.ui)
+    implementation(libs.androidx.preference)
     implementation(libs.androidx.room.runtime)
     implementation(libs.rikkax.appcompat)
     implementation(libs.rikkax.core)
@@ -189,9 +180,8 @@ dependencies {
     implementation(libs.betterypermissionhelper)
     implementation(libs.bcpkix.jdk18on)
     implementation(libs.arscblamer)
-    compileOnly(libs.lombok)
-    annotationProcessor(libs.lombok)
     implementation(libs.markwon.core)
+    implementation(libs.remote.preferences)
 }
 
 
@@ -199,6 +189,12 @@ configurations.all {
     exclude("androidx.appcompat", "appcompat")
     exclude("org.jetbrains.kotlin", "kotlin-stdlib-jdk7")
     exclude("org.jetbrains.kotlin", "kotlin-stdlib-jdk8")
+}
+
+tasks.configureEach {
+    if (name.endsWith("ReleaseArtProfile")) {
+        enabled = false
+    }
 }
 
 interface InjectedExecOps {
@@ -212,23 +208,23 @@ afterEvaluate {
             runCatching {
                 val injected  = project.objects.newInstance<InjectedExecOps>()
                 runBlocking {
+                    delay(500.milliseconds)
                     injected.execOps.exec {
                         commandLine(
                             "adb",
                             "shell",
                             "am",
                             "force-stop",
-                            project.properties["debug_package_name"]?.toString()
+                            project.findProperty("debug_package_name")?.toString()
                         )
                     }
-                    delay(500)
                     injected.execOps.exec {
                         commandLine(
                             "adb",
                             "shell",
                             "monkey",
                             "-p",
-                            project.properties["debug_package_name"].toString(),
+                            project.findProperty("debug_package_name")?.toString(),
                             "1"
                         )
                     }

@@ -41,17 +41,18 @@ import com.wmods.wppenhacer.xposed.core.components.WaContactWpp
 import com.wmods.wppenhacer.xposed.utils.DesignUtils
 import com.wmods.wppenhacer.xposed.utils.Utils
 import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XSharedPreferences
+import android.content.SharedPreferences 
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import java.util.Collections
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
-class AboutContactPicker(loader: ClassLoader, preferences: XSharedPreferences) :
+class AboutContactPicker(loader: ClassLoader, preferences:SharedPreferences) :
     Feature(loader, preferences) {
 
     override fun doHook() {
-        val aboutClass = WppCore.getAboutActivityClass(classLoader)
+        val aboutClass = WppCore.aboutActivityClass
 
         XposedHelpers.findAndHookMethod(
             Activity::class.java,
@@ -223,7 +224,7 @@ class AboutContactPicker(loader: ClassLoader, preferences: XSharedPreferences) :
         private val allItems = ArrayList<ContactPickerItem>()
         private val visibleItems = ArrayList<ContactPickerItem>()
         private val selectedJids = LinkedHashSet<String>()
-        private val avatarCache = HashMap<String, Drawable>()
+        private val avatarCache = ConcurrentHashMap<String, Drawable>()
         private val avatarLoading = Collections.synchronizedSet(HashSet<String>())
 
         private var rootView: FrameLayout? = null
@@ -597,7 +598,7 @@ class AboutContactPicker(loader: ClassLoader, preferences: XSharedPreferences) :
             swipeRefreshLayout?.isRefreshing = true
 
             val preservedSelection = LinkedHashSet(selectedJids)
-            Utils.getExecutor().execute {
+            Utils.executor.execute {
                 try {
                     val loadedItems = ContactPickerDataProvider.loadPickerItems(
                         activity,
@@ -715,7 +716,7 @@ class AboutContactPicker(loader: ClassLoader, preferences: XSharedPreferences) :
 
             val placeholder = createAvatarPlaceholder(item)
             if (avatarLoading.add(item.jid)) {
-                Utils.getExecutor().execute {
+                Utils.executor.execute {
                     val drawable = loadAvatarDrawable(item)
                     if (drawable != null) {
                         avatarCache[item.jid] = drawable

@@ -11,13 +11,13 @@ import com.wmods.wppenhacer.xposed.features.general.Tasker
 import com.wmods.wppenhacer.xposed.utils.ReflectionUtils
 import com.wmods.wppenhacer.xposed.utils.Utils
 import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XSharedPreferences
+import android.content.SharedPreferences 
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import org.luckypray.dexkit.query.enums.StringMatchType
 import java.util.concurrent.ConcurrentHashMap
 
-class CallPrivacy(loader: ClassLoader, preferences: XSharedPreferences) :
+class CallPrivacy(loader: ClassLoader, preferences:SharedPreferences) :
     Feature(loader, preferences) {
 
     private var mVoipManager: Any? = null
@@ -30,7 +30,7 @@ class CallPrivacy(loader: ClassLoader, preferences: XSharedPreferences) :
             }
         })
 
-        val clazzVoip = WppCore.getVoipManagerClass(classLoader)
+        val clazzVoip = WppCore.voipManagerClass
         val endCallMethod = clazzVoip.declaredMethods.first { it.name == "endCall" }
         val rejectCallMethod = clazzVoip.declaredMethods.first { it.name == "rejectCall" }
 
@@ -38,7 +38,7 @@ class CallPrivacy(loader: ClassLoader, preferences: XSharedPreferences) :
 
         XposedBridge.hookMethod(onCallReceivedMethod, object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
-                val callInfoClass = WppCore.getVoipCallInfoClass(classLoader)
+                val callInfoClass = WppCore.voipCallInfoClass
                 val callinfo: Any? = when {
                     param.args[0] is Message -> (param.args[0] as Message).obj
                     param.args.size > 1 && callInfoClass.isInstance(param.args[1]) -> param.args[1]
@@ -90,7 +90,7 @@ class CallPrivacy(loader: ClassLoader, preferences: XSharedPreferences) :
         })
 
         XposedBridge.hookAllMethods(
-            WppCore.getVoipManagerClass(classLoader),
+            WppCore.voipManagerClass,
             "nativeHandleIncomingXmppOffer",
             object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {

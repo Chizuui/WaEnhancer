@@ -47,9 +47,10 @@
             app:title="@string/force_restore_backup" />
 
         <rikka.material.preference.MaterialSwitchPreference
-            app:key="lite_mode"
-            app:summary="@string/lite_mode_sum"
-            app:title="@string/lite_mode" />
+            app:defaultValue="false"
+            app:key="disable_ads"
+            app:summary="@string/disable_ads_sum"
+            app:title="@string/disable_ads" />
 
         <rikka.material.preference.MaterialSwitchPreference
             app:key="force_english"
@@ -93,7 +94,8 @@
 
         <EditTextPreference
             app:iconSpaceReserved="false"
-            app:key="secondstotime"
+            android:defaultValue="[TIME]"
+            app:key="text_in_hour"
             app:summary="@string/textonahora_sum"
             app:title="@string/textonahora" />
 
