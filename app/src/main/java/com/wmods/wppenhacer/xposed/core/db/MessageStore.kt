@@ -12,49 +12,30 @@ import java.util.stream.Collectors
 
 class MessageStore private constructor() {
 
-    private var mSqLiteDatabase: SQLiteDatabase? = null
+    /**
+     * Reuses WhatsApp's own connection. Opening a second connection to msgstore.db can change
+     * journal/locking behavior and make WhatsApp's writers fail with SQLITE_BUSY.
+     */
 
     /**
-     * Returns the database connection used for all MessageStore operations.
-     *
-     * Prefers the connection WhatsApp itself opened for msgstore.db (captured via a hook on
-     * SQLiteDatabase.openDatabase), so WPPEnhancer never creates a second connection to the same
-     * file. A second connection uses a different journal mode (TRUNCATE vs WhatsApp's WAL) and
-     * takes conflicting locks, which makes WhatsApp's own write threads crash with
-     * "database is locked (code 5 SQLITE_BUSY)".
-     *
-     * Only if the captured connection is unavailable does it fall back to opening its own
-     * connection, configured with WAL and a busy timeout to minimize lock contention.
+     * Returns null until WhatsApp has opened msgstore.db; the module must not open a second
+     * connection as a fallback.
      */
     private val sqLiteDatabase: SQLiteDatabase?
         get() {
-            if (whatsappDatabase != null && whatsappDatabase!!.isOpen) {
-                return whatsappDatabase
-            }
-            if (mSqLiteDatabase == null || !mSqLiteDatabase!!.isOpen) {
-                val dbFile = File(Utils.getApplication().filesDir.parentFile, "/databases/msgstore.db")
-                if (dbFile.exists()) {
-                    try {
-                        mSqLiteDatabase = SQLiteDatabase.openDatabase(
-                            dbFile.absolutePath,
-                            null,
-                            SQLiteDatabase.OPEN_READWRITE
-                        ).apply {
-                            enableWriteAheadLogging()
-                            execSQL("PRAGMA busy_timeout = 5000;")
-                        }
-                    } catch (e: Exception) {
-                        XposedBridge.log("WaEnhancer: Failed to open msgstore database: ${e.message}")
-                    }
-                }
-            }
-            return mSqLiteDatabase
+            return whatsappDatabase?.takeIf { it.isOpen }
+        }
 
     companion object {
         /** Connection WhatsApp itself uses for msgstore.db, captured by FeatureLoader. */
         @JvmStatic
         @Volatile
         var whatsappDatabase: SQLiteDatabase? = null
+
+        /** Connection WhatsApp itself uses for status.db, captured by FeatureLoader. */
+        @JvmStatic
+        @Volatile
+        var whatsappStatusDatabase: SQLiteDatabase? = null
 
         @Volatile
         private var mInstance: MessageStore? = null
@@ -296,24 +277,9 @@ class MessageStore private constructor() {
         if (messageKey.isNullOrEmpty()) {
             return false
         }
-        val dbFile = File(Utils.application.filesDir.parentFile, "/databases/status.db")
-        val statusDbInstance: SQLiteDatabase? = if (dbFile.exists()) {
-            try {
-                SQLiteDatabase.openDatabase(
-                    dbFile.absolutePath,
-                    null,
-                    SQLiteDatabase.OPEN_READWRITE
-                )
-            } catch (e: Exception) {
-                XposedBridge.log(e)
-                null
-            }
-        } else {
-            null
-        }
+        val statusDbInstance = whatsappStatusDatabase?.takeIf { it.isOpen }
 
         if (statusDbInstance != null && statusDbInstance.isOpen) {
-            try {
                 var statusRowId: Long? = null
                 var mediaFilePath: String? = null
 
@@ -396,14 +362,7 @@ class MessageStore private constructor() {
                         return true
                     }
                 }
-            } finally {
-                try {
-                    statusDbInstance.close()
-                } catch (e: Exception) {
-                    XposedBridge.log(e)
-                }
             }
-        }
 
         val db = sqLiteDatabase ?: return false
 

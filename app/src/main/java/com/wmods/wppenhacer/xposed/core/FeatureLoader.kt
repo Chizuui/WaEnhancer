@@ -366,8 +366,8 @@ class FeatureLoader {
         }
 
         /**
-         * Hooks SQLiteDatabase.openDatabase to capture the connection WhatsApp itself uses for
-         * msgstore.db and wa.db. WPPEnhancer then reuses that exact connection instead of opening
+         * Hooks database opening methods to capture the connections WhatsApp itself uses for
+         * msgstore.db, status.db, and wa.db. WPPEnhancer then reuses those exact connections instead of opening
          * its own second connection to the same file. A second connection with a different journal
          * mode (TRUNCATE vs WAL) takes conflicting locks and causes "database is locked (code 5
          * SQLITE_BUSY)" crashes inside WhatsApp's own write threads (AsyncCommitThread,
@@ -375,16 +375,17 @@ class FeatureLoader {
          */
         private fun captureWhatsAppDatabaseConnections() {
             try {
-                XposedBridge.hookAllMethods(
-                    SQLiteDatabase::class.java, "openDatabase",
-                    object : XC_MethodHook() {
+                val hook = object : XC_MethodHook() {
                         override fun afterHookedMethod(param: MethodHookParam) {
                             try {
-                                val path = param.args.getOrNull(0) as? String ?: return
+                                val path = param.args.getOrNull(0)?.toString() ?: return
                                 val db = param.result as? SQLiteDatabase ?: return
                                 if (path.endsWith("msgstore.db")) {
                                     MessageStore.whatsappDatabase = db
                                     XposedBridge.log("WaEnhancer: Captured WhatsApp msgstore.db connection")
+                                } else if (path.endsWith("status.db")) {
+                                    MessageStore.whatsappStatusDatabase = db
+                                    XposedBridge.log("WaEnhancer: Captured WhatsApp status.db connection")
                                 } else if (path.endsWith("wa.db")) {
                                     WppCore.whatsappWaDatabase = db
                                     XposedBridge.log("WaEnhancer: Captured WhatsApp wa.db connection")
@@ -394,7 +395,8 @@ class FeatureLoader {
                             }
                         }
                     }
-                )
+                XposedBridge.hookAllMethods(SQLiteDatabase::class.java, "openDatabase", hook)
+                XposedBridge.hookAllMethods(SQLiteDatabase::class.java, "openOrCreateDatabase", hook)
             } catch (t: Throwable) {
                 XposedBridge.log("WaEnhancer: Failed to hook SQLiteDatabase.openDatabase: ${t.message}")
             }
