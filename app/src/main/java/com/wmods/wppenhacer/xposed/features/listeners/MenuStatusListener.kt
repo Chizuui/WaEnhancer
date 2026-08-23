@@ -11,10 +11,12 @@ import android.content.SharedPreferences
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import org.luckypray.dexkit.query.enums.StringMatchType
+import java.lang.reflect.Field
 import java.util.concurrent.CopyOnWriteArraySet
 
 class MenuStatusListener(classLoader: ClassLoader, preferences:SharedPreferences) :
     Feature(classLoader, preferences) {
+
 
     companion object {
         @JvmStatic
@@ -22,6 +24,8 @@ class MenuStatusListener(classLoader: ClassLoader, preferences:SharedPreferences
 
         @JvmStatic
         lateinit var statusData: StatusData
+
+        private var currentIndexField: Field? = null
     }
 
 
@@ -36,6 +40,11 @@ class MenuStatusListener(classLoader: ClassLoader, preferences:SharedPreferences
             statusPlaybackContactFragmentClass,
             List::class.java
         )
+
+        currentIndexField = runCatching {
+            Unobfuscator.loadStatusPlaybackCurrentIndexField(classLoader).apply { isAccessible = true }
+        }.getOrNull()
+
 
         XposedBridge.hookMethod(menuStatusMethod, object : XC_MethodHook() {
 
@@ -92,7 +101,15 @@ class MenuStatusListener(classLoader: ClassLoader, preferences:SharedPreferences
             get() = getCurrentItemList()[currentIndex]
 
         val currentIndex: Int
-            get() = XposedHelpers.getObjectField(fragmentInstance, "A00") as Int
+            get() {
+                val resolvedIndex = currentIndexField?.let { field ->
+                    runCatching { field.getInt(fragmentInstance) }.getOrNull()
+                }
+                return resolvedIndex
+                    ?: (XposedHelpers.getObjectField(fragmentInstance, "A02") as? Int)
+                    ?: (XposedHelpers.getObjectField(fragmentInstance, "A00") as? Int)
+                    ?: 0
+            }
 
         fun getCurrentItemList(): List<StatusItemWpp> {
             return cachedItemList ?: listStatus.mapNotNull { obj ->

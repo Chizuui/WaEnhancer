@@ -3398,4 +3398,40 @@ object Unobfuscator {
         }
     }
 
+    fun loadStatusPlaybackCurrentIndexField(loader: ClassLoader): Field {
+        return UnobfuscatorCache.getInstance().getField(loader) {
+            val methods = bridge.findMethod {
+                matcher {
+                    usingStrings("playbackFragment/setPageActive no-messages ")
+                }
+            }
+            if (methods.isNotEmpty()) {
+                val methodData = methods[0]
+                val statusPlaybackClass = methodData.declaredClassName
+                for (usingField in methodData.usingFields) {
+                    val field = usingField.field
+                    if (field.className == statusPlaybackClass && field.type.name == "int") {
+                        return@getField field.getFieldInstance(loader)
+                    }
+                }
+            }
+            val statusPlaybackClass = findFirstClassUsingName(
+                loader,
+                StringMatchType.EndsWith,
+                "StatusPlaybackContactFragment"
+            )
+            val menuStatusMethod = loadMenuStatusMethod(loader)
+            val menuMethodData = bridge.getMethodData(menuStatusMethod)
+            if (menuMethodData != null) {
+                for (usingField in menuMethodData.usingFields) {
+                    val field = usingField.field
+                    if (field.className == statusPlaybackClass.name && field.type.name == "int") {
+                        return@getField field.getFieldInstance(loader)
+                    }
+                }
+            }
+            throw NoSuchFieldException("StatusPlayback current index field not found")
+        }
+    }
+
 }
