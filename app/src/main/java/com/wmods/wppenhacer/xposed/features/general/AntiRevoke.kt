@@ -21,7 +21,7 @@ import com.wmods.wppenhacer.xposed.features.listeners.ConversationItemListener
 import com.wmods.wppenhacer.xposed.utils.ReflectionUtils
 import com.wmods.wppenhacer.xposed.utils.Utils
 import de.robv.android.xposed.XC_MethodHook
-import android.content.SharedPreferences 
+import android.content.SharedPreferences
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import java.lang.reflect.Method
@@ -30,7 +30,7 @@ import java.util.Collections
 import java.util.Date
 import java.util.concurrent.ConcurrentHashMap
 
-class AntiRevoke(loader: ClassLoader, preferences:SharedPreferences) :
+class AntiRevoke(loader: ClassLoader, preferences: SharedPreferences) :
     Feature(loader, preferences) {
 
     companion object {
@@ -144,15 +144,12 @@ class AntiRevoke(loader: ClassLoader, preferences:SharedPreferences) :
                 val messageId = XposedHelpers.getObjectField(fMessage.getObject(), "A01") as String
 
 
-                if (messageKey.remoteJid.isGroup) {
-                    if (deviceJid != null && handleRevocationAttempt(fMessage, messageId) != 0) {
-                        param.result = true
-                    }
-                } else if (!messageKey.isFromMe && handleRevocationAttempt(
-                        fMessage,
-                        messageId
-                    ) != 0
-                ) {
+                val shouldIntercept = if (messageKey.remoteJid.isGroup) {
+                    deviceJid != null && handleRevocationAttempt(fMessage, messageId) != 0
+                } else {
+                    !messageKey.isFromMe && handleRevocationAttempt(fMessage, messageId) != 0
+                }
+                if (shouldIntercept) {
                     val method = param.method as Method
                     if (method.returnType != Boolean::class.javaPrimitiveType) {
                         val constructor = method.returnType.constructors[0]
@@ -266,7 +263,11 @@ class AntiRevoke(loader: ClassLoader, preferences:SharedPreferences) :
             }
 
             mainHandler.post {
-                if (boundView != null && !ConversationItemListener.isViewBoundToMessage(boundView, boundMessageId)) {
+                if (boundView != null && !ConversationItemListener.isViewBoundToMessage(
+                        boundView,
+                        boundMessageId
+                    )
+                ) {
                     return@post
                 }
 
@@ -274,7 +275,11 @@ class AntiRevoke(loader: ClassLoader, preferences:SharedPreferences) :
                     if (date != null) {
                         dateTextView.paint.isUnderlineText = true
                         dateTextView.setOnClickListener {
-                            if (boundView != null && !ConversationItemListener.isViewBoundToMessage(boundView, boundMessageId)) return@setOnClickListener
+                            if (boundView != null && !ConversationItemListener.isViewBoundToMessage(
+                                    boundView,
+                                    boundMessageId
+                                )
+                            ) return@setOnClickListener
                             val toastMessage =
                                 Utils.application.getString(R.string.message_removed_on)
                                     .format(date)
@@ -298,7 +303,12 @@ class AntiRevoke(loader: ClassLoader, preferences:SharedPreferences) :
 
                         2 -> {
                             val drawable = Utils.application.getDrawable(R.drawable.deleted)
-                            dateTextView.setCompoundDrawablesWithIntrinsicBounds(null, null, drawable, null)
+                            dateTextView.setCompoundDrawablesWithIntrinsicBounds(
+                                null,
+                                null,
+                                drawable,
+                                null
+                            )
                             dateTextView.compoundDrawablePadding = 5
                         }
                     }
