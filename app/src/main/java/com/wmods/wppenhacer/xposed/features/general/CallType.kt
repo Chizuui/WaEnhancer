@@ -1,6 +1,7 @@
 package com.wmods.wppenhacer.xposed.features.general
 
 import android.app.Dialog
+import android.content.Context
 import android.content.DialogInterface
 import android.content.Intent
 import android.os.Bundle
@@ -13,7 +14,9 @@ import com.wmods.wppenhacer.xposed.core.components.SharedPreferencesWrapper
 import com.wmods.wppenhacer.xposed.core.devkit.UnobfuscatorCache
 import com.wmods.wppenhacer.xposed.utils.ReflectionUtils
 import de.robv.android.xposed.XC_MethodHook
-import android.content.SharedPreferences 
+import android.content.SharedPreferences
+import com.wmods.wppenhacer.xposed.core.components.WaContactWpp
+import com.wmods.wppenhacer.xposed.core.devkit.Unobfuscator
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 
@@ -24,57 +27,50 @@ class CallType(loader: ClassLoader, preferences:SharedPreferences) :
 
         SharedPreferencesWrapper.addHook { key, value ->
             if (key == "call_confirmation_dialog_count") {
-                return@addHook 1
+                99
+            }else {
+                value
             }
-            value
         }
 
+        val startCallMethod = Unobfuscator.loadStartOutgoingCallMethod(classLoader)
 
-        val callConfirmationFragment = XposedHelpers.findClass(
-            "com.whatsapp.calling.fragment.CallConfirmationFragment",
-            classLoader
-        )
-        val method = ReflectionUtils.findMethodUsingFilter(
-            callConfirmationFragment
-        ) { m -> m.parameterCount == 1 && m.parameterTypes[0] == Bundle::class.java }
-        XposedBridge.hookMethod(method, object : XC_MethodHook() {
+        XposedBridge.hookMethod(startCallMethod, object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
-                val bundle = param.args.firstOrNull() as? Bundle ?: return
-                param.setObjectExtra("wae_call_jid", bundle.getString("jid"))
-                param.setObjectExtra("wae_is_video_call", bundle.getBoolean("is_video_call"))
-            }
+                val context = param.args[0] as? Context ?: return
+                val contactObj = param.args[1] ?: return
+                val isVideo = param.args[3] as? Boolean ?: false
+                if (isVideo) return
 
-            @Throws(Throwable::class)
-            override fun afterHookedMethod(param: MethodHookParam) {
-                val jid = param.getObjectExtra("wae_call_jid") as? String
-                val isVideoCall = param.getObjectExtra("wae_is_video_call") as? Boolean ?: false
-                if (jid == null || isVideoCall) return
-                val origDialog = param.result as Dialog
-                val context = origDialog.context
-                val mAlertDialog = AlertDialogWpp(origDialog.context)
-                lateinit var newDialog: Dialog
+                val waContact = WaContactWpp(contactObj)
+                val userJid = waContact.userJid
+                val phoneNumber = userJid.phoneNumber
+                if (phoneNumber.isNullOrEmpty()) return
+                val originalArgs = param.args.copyOf()
+                param.result = null
+                val mAlertDialog = AlertDialogWpp(context)
                 mAlertDialog.setTitle(UnobfuscatorCache.getInstance().getString("selectcalltype"))
                 mAlertDialog.setItems(
                     arrayOf(
                         context.getString(R.string.phone_call),
                         context.getString(R.string.whatsapp_call)
                     )
-                ) { _: DialogInterface?, which: Int ->
-                    newDialog!!.dismiss()
+                ) { dialog: DialogInterface?, which: Int ->
+                    dialog?.dismiss()
                     when (which) {
                         0 -> {
                             val intent = Intent()
                             intent.action = Intent.ACTION_DIAL
-                            val userJid = UserJid(jid)
                             intent.data = ("tel:+" + userJid.phoneNumber).toUri()
                             context.startActivity(intent)
                         }
 
-                        1 -> origDialog.show()
+                        1 -> {
+                            XposedBridge.invokeOriginalMethod(param.method, param.thisObject, originalArgs)
+                        }
                     }
                 }
-                newDialog = mAlertDialog.create()
-                param.setResult(newDialog)
+                mAlertDialog.show()
             }
         })
     }

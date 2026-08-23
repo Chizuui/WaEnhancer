@@ -3434,4 +3434,13 @@ object Unobfuscator {
         }
     }
 
+    fun loadStartOutgoingCallMethod(classLoader: ClassLoader): Method {
+        return UnobfuscatorCache.getInstance().getMethod(classLoader) {
+            findFirstMethodUsingStrings(
+                classLoader,
+                StringMatchType.Contains,
+                "outgoing-launch/cm-null-contact"
+            ) ?: throw NoSuchMethodException("StartOutgoingCall method not found")
+        }
+    }
 }
