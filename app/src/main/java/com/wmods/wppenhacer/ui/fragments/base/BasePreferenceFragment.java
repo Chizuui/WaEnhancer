@@ -69,7 +69,17 @@ public abstract class BasePreferenceFragment extends PreferenceFragmentCompat
     public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, @Nullable String s) {
         Intent intent = new Intent(BuildConfig.APPLICATION_ID + ".MANUAL_RESTART");
         App.instance.sendBroadcast(intent);
-        chanceStates(s);
+        if (isAdded()) {
+            chanceStates(s);
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        if (mPrefs != null) {
+            mPrefs.unregisterOnSharedPreferenceChangeListener(this);
+        }
     }
 
     private void setPreferenceState(String key, boolean enabled) {
@@ -152,7 +162,9 @@ public abstract class BasePreferenceFragment extends PreferenceFragmentCompat
 
         if (Objects.equals(key, "force_english")) {
             mPrefs.edit().commit();
-            Utils.doRestart(requireContext());
+            if (getContext() != null) {
+                Utils.doRestart(getContext());
+            }
         }
 
         var igstatus = mPrefs.getBoolean("igstatus", false);
