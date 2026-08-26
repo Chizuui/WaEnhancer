@@ -1993,8 +1993,8 @@ object Unobfuscator {
         }
     }
 
-    @Throws(Exception::class)
     @JvmStatic
+    @Throws(Exception::class)
     fun loadExpirationClass(classLoader: ClassLoader): Class<*> {
         return UnobfuscatorCache.getInstance().getClass(classLoader) {
             val methods = findAllMethodUsingStrings(
@@ -2002,10 +2002,9 @@ object Unobfuscator {
                 StringMatchType.Contains,
                 "software_forced_expiration"
             )
-            val expirationMethod = Arrays.stream(methods)
-                .filter { methodData -> methodData.returnType == Date::class.java }
-                .findFirst().orElse(null) ?: throw RuntimeException("Expiration class not found")
-            expirationMethod.declaringClass
+            val expirationMethod = methods.firstOrNull { it.returnType == Date::class.java }
+                ?: throw RuntimeException("Expiration class not found")
+            return@getClass expirationMethod.declaringClass
         }
     }
 
