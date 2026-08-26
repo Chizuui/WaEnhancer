@@ -38,7 +38,7 @@ class ChatLimit(loader: ClassLoader, preferences:SharedPreferences) :
                 override fun afterHookedMethod(param: MethodHookParam?) {
                     if (antiDisappearing) {
                         Utils.databaseExecutor.execute {
-                            getInstance().executeSQL("UPDATE message_ephemeral SET expire_timestamp = 2553512370000")
+                            getInstance().executeWritableSQL("UPDATE message_ephemeral SET expire_timestamp = 2553512370000")
                         }
                     }
                 }
