@@ -1,7 +1,12 @@
 [ADDED]
-* Added support for WA/WB 2.26.32.xx
+* Added support for WA/WB 2.26.33.xx
 
 [FIXED]
-* Fixed error when selecting the type of call (Phone or WhatsApp)
-* Fixed error in anti-revoke of messages (Caused random crashes)
-* Fixed error in status buttons not appearing (Like download, repost)
+* Fixed writing bug in the database
+* Fixed bug when restarting Whatsapp
+* Fixed bug in hiding the tick (sometimes it crashed when trying to hide the tick)
+* Fixed random crashes in the WAE
+
+[IMPROVED]
+* Improvement in HD video upload (It has not been completely fixed, but now it is possible to send HD videos more easily)
+* Improved handling for disabling WhatsApp version expiration
