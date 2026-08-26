@@ -46,7 +46,7 @@ object WppCore {
 
     private var mGenJidMethod: Method? = null
     private var bottomDialog: Class<*>? = null
-    private lateinit var privPrefs: SharedPreferences
+    private var _privPrefs: SharedPreferences? = null
     private var mStartUpConfig: Any? = null
     private var mActionUser: Any? = null
     @Volatile
@@ -72,7 +72,7 @@ object WppCore {
     @JvmStatic
     @Throws(Exception::class)
     fun initialize(loader: ClassLoader, pref: SharedPreferences) {
-        privPrefs = Utils.application.getSharedPreferences("WaGlobal", Context.MODE_PRIVATE)
+        _privPrefs = Utils.application.getSharedPreferences("WaGlobal", Context.MODE_PRIVATE)
 
         // init UserJID
         val companionField = FMessageWpp.UserJid.TYPE_JID.getDeclaredField("Companion")
@@ -562,22 +562,25 @@ object WppCore {
 
     @JvmStatic
     fun getPrivPrefs(): SharedPreferences {
-        return privPrefs
+        if (_privPrefs == null) {
+            _privPrefs = Utils.application.getSharedPreferences("WaGlobal", Context.MODE_PRIVATE)
+        }
+        return _privPrefs!!
     }
 
     @JvmStatic
     fun setPrivString(key: String, value: String?) {
-        privPrefs.edit(commit = true) { putString(key, value) }
+        getPrivPrefs().edit(commit = true) { putString(key, value) }
     }
 
     @JvmStatic
     fun getPrivString(key: String, defaultValue: String?): String? {
-        return privPrefs.getString(key, defaultValue)
+        return getPrivPrefs().getString(key, defaultValue)
     }
 
     @JvmStatic
     fun getPrivJSON(key: String, defaultValue: JSONObject): JSONObject {
-        val jsonStr = privPrefs.getString(key, null) ?: return defaultValue
+        val jsonStr = getPrivPrefs().getString(key, null) ?: return defaultValue
         return try {
             JSONObject(jsonStr)
         } catch (_: Exception) {
@@ -587,26 +590,27 @@ object WppCore {
 
     @JvmStatic
     fun setPrivJSON(key: String, value: JSONObject) {
-        privPrefs.edit(commit = true) { putString(key, value.toString()) }
+        getPrivPrefs().edit(commit = true) { putString(key, value.toString()) }
     }
 
     @SuppressLint("ApplySharedPref")
     @JvmStatic
     fun removePrivKey(s: String?) {
-        if (s != null && privPrefs.contains(s)) {
-            privPrefs.edit(commit = true) { remove(s) }
+        val prefs = getPrivPrefs()
+        if (s != null && prefs.contains(s)) {
+            prefs.edit(commit = true) { remove(s) }
         }
     }
 
     @SuppressLint("ApplySharedPref")
     @JvmStatic
     fun setPrivBoolean(key: String, value: Boolean) {
-        privPrefs.edit(commit = true) { putBoolean(key, value) }
+        getPrivPrefs().edit(commit = true) { putBoolean(key, value) }
     }
 
     @JvmStatic
     fun getPrivBoolean(key: String, defaultValue: Boolean): Boolean {
-        return privPrefs.getBoolean(key, defaultValue)
+        return getPrivPrefs().getBoolean(key, defaultValue)
     }
 
     @JvmStatic
