@@ -925,7 +925,8 @@ object Unobfuscator {
                     paramCount(0)
                     usingStrings("SendE2EMessageJob/onRun")
                 }
-            }.firstOrNull()?.getMethodInstance(classLoader) ?: throw Exception("BlueOnReplayMessageJob method not found")
+            }.firstOrNull()?.getMethodInstance(classLoader)
+                ?: throw Exception("BlueOnReplayMessageJob method not found")
         }
     }
 
@@ -1013,11 +1014,11 @@ object Unobfuscator {
         }
     }
 
-    @Throws(Exception::class)
     @JvmStatic
+    @Throws(Exception::class)
     fun loadViewHolder(loader: ClassLoader): Class<*> {
         return UnobfuscatorCache.getInstance().getClass(loader) {
-            val methods = bridge.findMethod {
+            bridge.findMethod {
                 matcher {
                     usingNumbers(
                         Utils.getID("conversations_row_header_stub", "id"),
@@ -1026,11 +1027,9 @@ object Unobfuscator {
                         Utils.getID("contact_photo", "id")
                     )
                 }
-            }.stream()
-                .filter { methodData -> methodData.paramTypes[0].name == Context::class.java.name }
-                .collect(Collectors.toList())
-            if (methods.isEmpty()) throw ClassNotFoundException("View Holder not found!")
-            methods[0].getMethodInstance(loader).declaringClass
+            }.firstOrNull { methodData ->
+                methodData.paramTypes[0].name == Context::class.java.name
+            }?.getClassInstance(loader) ?: throw ClassNotFoundException("View Holder not found!")
         }
     }
 
@@ -2358,8 +2357,6 @@ object Unobfuscator {
     }
 
 
-
-
     @Throws(Exception::class)
     @JvmStatic
     fun loadProximitySensorListenerClasses(classLoader: ClassLoader): Array<Class<*>> {
@@ -2635,7 +2632,8 @@ object Unobfuscator {
                     paramCount = 0
                     modifiers = Modifier.PRIVATE
                 }
-            }.firstOrNull() ?: throw RuntimeException("ConversationsFragment height calculation method not found")
+            }.firstOrNull()
+                ?: throw RuntimeException("ConversationsFragment height calculation method not found")
             return@getMethod methodData.getMethodInstance(classLoader)
         }
     }
@@ -2656,7 +2654,8 @@ object Unobfuscator {
                     returnType = "void"
                     modifiers = Modifier.PUBLIC or Modifier.STATIC
                 }
-            }.firstOrNull() ?: throw RuntimeException("ConversationsFragment update layout method not found")
+            }.firstOrNull()
+                ?: throw RuntimeException("ConversationsFragment update layout method not found")
             return@getMethod methodData.getMethodInstance(classLoader)
         }
     }
