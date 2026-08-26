@@ -3225,15 +3225,20 @@ object Unobfuscator {
 
     fun loadOndispatchMessage(classLoader: ClassLoader): Array<Method> {
         return UnobfuscatorCache.getInstance().getMethods(classLoader) {
-            val result = bridge.findMethod {
+            bridge.findMethod {
                 matcher {
-                    usingNumbers(419)
-                    paramCount(1, 3)
+                    anyOf {
+                        match {
+                            usingNumbers(419)
+                        }
+                        match {
+                            usingStrings("ConnectionWriter/sendReadReceipts")
+                        }
+                    }
+                    paramCount(1, 5)
                 }
             }.filter { !it.paramTypeNames.isEmpty() && it.paramTypeNames[0].contains("Message") }
-                .map { it.getMethodInstance(classLoader) }.toTypedArray()
-            if (result.isEmpty()) return@getMethods null
-            result
+                .map { it.getMethodInstance(classLoader) }.toTypedArray().ifEmpty { throw Exception("onDispatchMessage method not found") }
         }
 
     }
