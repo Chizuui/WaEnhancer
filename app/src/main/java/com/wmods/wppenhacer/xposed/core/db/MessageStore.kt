@@ -189,6 +189,11 @@ class MessageStore private constructor() {
         }
     }
 
+    @Synchronized
+    fun executeWritableSQL(sql: String, maxRetries: Int = 3, retryDelayMs: Long = 500L) {
+        executeSQL(sql)
+    }
+
     fun storeMessageRead(messageId: String) {
         val db = sqLiteDatabase ?: return
         XposedBridge.log("storeMessageRead: $messageId")
