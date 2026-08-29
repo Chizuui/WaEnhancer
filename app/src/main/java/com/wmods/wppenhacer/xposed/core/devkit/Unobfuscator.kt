@@ -925,7 +925,8 @@ object Unobfuscator {
                     paramCount(0)
                     usingStrings("SendE2EMessageJob/onRun")
                 }
-            }.firstOrNull()?.getMethodInstance(classLoader) ?: throw Exception("BlueOnReplayMessageJob method not found")
+            }.firstOrNull()?.getMethodInstance(classLoader)
+                ?: throw Exception("BlueOnReplayMessageJob method not found")
         }
     }
 
@@ -1013,11 +1014,11 @@ object Unobfuscator {
         }
     }
 
-    @Throws(Exception::class)
     @JvmStatic
+    @Throws(Exception::class)
     fun loadViewHolder(loader: ClassLoader): Class<*> {
         return UnobfuscatorCache.getInstance().getClass(loader) {
-            val methods = bridge.findMethod {
+            bridge.findMethod {
                 matcher {
                     usingNumbers(
                         Utils.getID("conversations_row_header_stub", "id"),
@@ -1026,11 +1027,9 @@ object Unobfuscator {
                         Utils.getID("contact_photo", "id")
                     )
                 }
-            }.stream()
-                .filter { methodData -> methodData.paramTypes[0].name == Context::class.java.name }
-                .collect(Collectors.toList())
-            if (methods.isEmpty()) throw ClassNotFoundException("View Holder not found!")
-            methods[0].getMethodInstance(loader).declaringClass
+            }.firstOrNull { methodData ->
+                methodData.paramTypes[0].name == Context::class.java.name
+            }?.getClassInstance(loader) ?: throw ClassNotFoundException("View Holder not found!")
         }
     }
 
@@ -1994,8 +1993,8 @@ object Unobfuscator {
         }
     }
 
-    @Throws(Exception::class)
     @JvmStatic
+    @Throws(Exception::class)
     fun loadExpirationClass(classLoader: ClassLoader): Class<*> {
         return UnobfuscatorCache.getInstance().getClass(classLoader) {
             val methods = findAllMethodUsingStrings(
@@ -2003,10 +2002,9 @@ object Unobfuscator {
                 StringMatchType.Contains,
                 "software_forced_expiration"
             )
-            val expirationMethod = Arrays.stream(methods)
-                .filter { methodData -> methodData.returnType == Date::class.java }
-                .findFirst().orElse(null) ?: throw RuntimeException("Expiration class not found")
-            expirationMethod.declaringClass
+            val expirationMethod = methods.firstOrNull { it.returnType == Date::class.java }
+                ?: throw RuntimeException("Expiration class not found")
+            return@getClass expirationMethod.declaringClass
         }
     }
 
@@ -2358,8 +2356,6 @@ object Unobfuscator {
     }
 
 
-
-
     @Throws(Exception::class)
     @JvmStatic
     fun loadProximitySensorListenerClasses(classLoader: ClassLoader): Array<Class<*>> {
@@ -2635,7 +2631,8 @@ object Unobfuscator {
                     paramCount = 0
                     modifiers = Modifier.PRIVATE
                 }
-            }.firstOrNull() ?: throw RuntimeException("ConversationsFragment height calculation method not found")
+            }.firstOrNull()
+                ?: throw RuntimeException("ConversationsFragment height calculation method not found")
             return@getMethod methodData.getMethodInstance(classLoader)
         }
     }
@@ -2656,7 +2653,8 @@ object Unobfuscator {
                     returnType = "void"
                     modifiers = Modifier.PUBLIC or Modifier.STATIC
                 }
-            }.firstOrNull() ?: throw RuntimeException("ConversationsFragment update layout method not found")
+            }.firstOrNull()
+                ?: throw RuntimeException("ConversationsFragment update layout method not found")
             return@getMethod methodData.getMethodInstance(classLoader)
         }
     }
@@ -3227,15 +3225,20 @@ object Unobfuscator {
 
     fun loadOndispatchMessage(classLoader: ClassLoader): Array<Method> {
         return UnobfuscatorCache.getInstance().getMethods(classLoader) {
-            val result = bridge.findMethod {
+            bridge.findMethod {
                 matcher {
-                    usingNumbers(419)
-                    paramCount(1, 3)
+                    anyOf {
+                        match {
+                            usingNumbers(419)
+                        }
+                        match {
+                            usingStrings("ConnectionWriter/sendReadReceipts")
+                        }
+                    }
+                    paramCount(1, 5)
                 }
             }.filter { !it.paramTypeNames.isEmpty() && it.paramTypeNames[0].contains("Message") }
-                .map { it.getMethodInstance(classLoader) }.toTypedArray()
-            if (result.isEmpty()) return@getMethods null
-            result
+                .map { it.getMethodInstance(classLoader) }.toTypedArray().ifEmpty { throw Exception("onDispatchMessage method not found") }
         }
 
     }
@@ -3398,4 +3401,49 @@ object Unobfuscator {
         }
     }
 
+    fun loadStatusPlaybackCurrentIndexField(loader: ClassLoader): Field {
+        return UnobfuscatorCache.getInstance().getField(loader) {
+            val methods = bridge.findMethod {
+                matcher {
+                    usingStrings("playbackFragment/setPageActive no-messages ")
+                }
+            }
+            if (methods.isNotEmpty()) {
+                val methodData = methods[0]
+                val statusPlaybackClass = methodData.declaredClassName
+                for (usingField in methodData.usingFields) {
+                    val field = usingField.field
+                    if (field.className == statusPlaybackClass && field.type.name == "int") {
+                        return@getField field.getFieldInstance(loader)
+                    }
+                }
+            }
+            val statusPlaybackClass = findFirstClassUsingName(
+                loader,
+                StringMatchType.EndsWith,
+                "StatusPlaybackContactFragment"
+            )
+            val menuStatusMethod = loadMenuStatusMethod(loader)
+            val menuMethodData = bridge.getMethodData(menuStatusMethod)
+            if (menuMethodData != null) {
+                for (usingField in menuMethodData.usingFields) {
+                    val field = usingField.field
+                    if (field.className == statusPlaybackClass.name && field.type.name == "int") {
+                        return@getField field.getFieldInstance(loader)
+                    }
+                }
+            }
+            throw NoSuchFieldException("StatusPlayback current index field not found")
+        }
+    }
+
+    fun loadStartOutgoingCallMethod(classLoader: ClassLoader): Method {
+        return UnobfuscatorCache.getInstance().getMethod(classLoader) {
+            findFirstMethodUsingStrings(
+                classLoader,
+                StringMatchType.Contains,
+                "outgoing-launch/cm-null-contact"
+            ) ?: throw NoSuchMethodException("StartOutgoingCall method not found")
+        }
+    }
 }

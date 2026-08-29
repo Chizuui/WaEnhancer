@@ -28,15 +28,21 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
-class ToastViewer(classLoader: ClassLoader, preferences:SharedPreferences) :
+class ToastViewer(classLoader: ClassLoader, preferences: SharedPreferences) :
     Feature(classLoader, preferences) {
-    init {
-        startCleanupTask()
-    }
 
     override fun doHook() {
+        val toastViewedMessage = prefs.getBoolean("toast_viewed_message", false)
+        val toastViewedStatus = prefs.getBoolean("toast_viewed_status", false)
+        if (!toastViewedMessage && !toastViewedStatus) {
+            return
+        }
+
+        startCleanupTask()
+
         val onInsertReceipt = loadOnInsertReceipt(classLoader)
 
         XposedBridge.hookMethod(onInsertReceipt, object : XC_MethodHook() {
@@ -222,6 +228,7 @@ class ToastViewer(classLoader: ClassLoader, preferences:SharedPreferences) :
     }
 
     private fun startCleanupTask() {
+        if (!cleanupStarted.compareAndSet(false, true)) return
         scheduler.scheduleWithFixedDelay({
             val currentTime = System.currentTimeMillis()
             synchronized(lastEventTimeMap) {
@@ -229,12 +236,19 @@ class ToastViewer(classLoader: ClassLoader, preferences:SharedPreferences) :
                     currentTime - entry.value >= MIN_INTERVAL
                 }
             }
-        }, MIN_INTERVAL, MIN_INTERVAL, TimeUnit.MILLISECONDS)
+        }, CLEANUP_INTERVAL, CLEANUP_INTERVAL, TimeUnit.SECONDS)
     }
 
     companion object {
         private const val MIN_INTERVAL: Long = 1000
+        private const val CLEANUP_INTERVAL: Long = 30
+        private val cleanupStarted = AtomicBoolean(false)
         private val lastEventTimeMap = ConcurrentHashMap<String, Long>()
-        private val scheduler: ScheduledExecutorService = Executors.newScheduledThreadPool(1)
+        private val scheduler: ScheduledExecutorService =
+            Executors.newSingleThreadScheduledExecutor { runnable ->
+                Thread(runnable, "WaEnhancer-ToastViewerCleanup").apply {
+                    isDaemon = true
+                }
+            }
     }
 }

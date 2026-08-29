@@ -229,7 +229,8 @@ class FeatureLoader {
                         val errors = synchronized(list) { list.toList() }
                         if (errors.isNotEmpty()) {
                             val activity = param.thisObject as Activity
-                            val msg = errors.joinToString("\n") { "${it.pluginName} - ${it.message}" }
+                            val msg =
+                                errors.joinToString("\n") { "${it.pluginName} - ${it.message}" }
 
                             AlertDialogWpp(activity)
                                 .setTitle(activity.getString(R.string.error_detected))
@@ -245,7 +246,7 @@ class FeatureLoader {
                                         mApp?.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                                     val clip = ClipData.newPlainText(
                                         "text",
-                                         errors.joinToString("\n") { it.toString() })
+                                        errors.joinToString("\n") { it.toString() })
                                     clipboard.setPrimaryClip(clip)
                                     Toast.makeText(
                                         mApp,
@@ -353,16 +354,18 @@ class FeatureLoader {
         @Throws(Exception::class)
         fun disableExpirationVersion(classLoader: ClassLoader) {
             val expirationClass = Unobfuscator.loadExpirationClass(classLoader)
-            val method =
-                ReflectionUtils.findMethodUsingFilter(expirationClass) { m -> m.returnType == Date::class.java }
-            XposedBridge.hookMethod(method, object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    val calendar = Calendar.getInstance().apply {
-                        set(2099, 11, 31)
+            val methods =
+                ReflectionUtils.findAllMethodsUsingFilter(expirationClass) { m -> m.returnType == Date::class.java }
+            for (method in methods) {
+                XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        val calendar = Calendar.getInstance().apply {
+                            set(2099, 11, 31)
+                        }
+                        param.result = calendar.time
                     }
-                    param.result = calendar.time
-                }
-            })
+                })
+            }
         }
 
         /**
