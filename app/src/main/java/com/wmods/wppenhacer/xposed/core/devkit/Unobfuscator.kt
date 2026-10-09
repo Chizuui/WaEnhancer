@@ -213,16 +213,38 @@ object Unobfuscator {
     @JvmStatic
     fun loadGhostModeMethod(classLoader: ClassLoader): Method {
         return UnobfuscatorCache.getInstance().getMethod(classLoader) {
-            val method = findFirstMethodUsingStrings(
-                classLoader,
-                StringMatchType.Contains,
-                "HandleMeComposing/sendComposing"
+            val candidates = bridge.findMethod {
+                matcher {
+                    addUsingString("HandleMeComposing/sendComposing", StringMatchType.Contains)
+                }
+            }.filter { it.isMethod }.mapNotNull { convertRealMethod(it, classLoader) }
+
+            if (candidates.isEmpty()) throw Exception("GhostMode method not found")
+
+            val jidClass = FMessageWpp.UserJid.TYPE_JID
+
+            // Legacy signature: composing state is the third parameter.
+            candidates.firstOrNull { m ->
+                m.parameterTypes.size > 2 && m.parameterTypes[2] == Int::class.javaPrimitiveType
+            }?.let { return@getMethod it }
+
+            // Newer builds reshuffled the signature. TypingPrivacy reads the arguments by type, so
+            // any overload carrying exactly one Int state plus a Jid target is usable.
+            candidates.firstOrNull { m ->
+                val params = m.parameterTypes
+                params.count { it == Int::class.javaPrimitiveType } == 1 &&
+                        params.any { jidClass.isAssignableFrom(it) }
+            }?.let { return@getMethod it }
+
+            // Last resort: any overload that still exposes a composing state.
+            candidates.firstOrNull { m ->
+                m.parameterTypes.any { it == Int::class.javaPrimitiveType }
+            }?.let { return@getMethod it }
+
+            throw Exception(
+                "GhostMode method not found parameter type: " +
+                        candidates.joinToString(", ") { getMethodDescriptor(it).orEmpty() }
             )
-                ?: throw Exception("GhostMode method not found")
-            if (method.parameterTypes.size > 2 && method.parameterTypes[2] == Int::class.java) {
-                return@getMethod method
-            }
-            throw Exception("GhostMode method not found parameter type")
         }
     }
 

@@ -1,4 +1,5 @@
 [FIXED]
+* Fixed Typing Privacy error on newer WhatsApp versions, where the composing state parameter moved
 * Fixed WhatsApp closing by itself when opening the document picker on some devices
 * Fixed the contact list not showing your contacts when choosing contacts inside the module
 * Fixed groups appearing without a name in the contact list; they now show their real names

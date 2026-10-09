@@ -29,6 +29,7 @@ class TypingPrivacy(
 
                 if (jidObj == null) {
                     logDebug("UserJid not found in Typing Privacy")
+                    return@before
                 }
 
                 val userJid = FMessageWpp.UserJid(jidObj)
