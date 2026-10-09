@@ -7,12 +7,16 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.media.MediaScannerConnection
 import android.net.Uri
+import android.provider.MediaStore
 import android.os.Binder
+import android.os.Build
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.text.TextUtils
@@ -25,7 +29,6 @@ import com.wmods.wppenhacer.xposed.core.FeatureLoader
 import com.wmods.wppenhacer.xposed.core.WppCore.getClientBridge
 import com.wmods.wppenhacer.xposed.core.WppCore.getContactName
 import com.wmods.wppenhacer.xposed.core.components.FMessageWpp.UserJid
-import de.robv.android.xposed.XposedBridge
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -122,7 +125,7 @@ object Utils {
 
             return id
         } catch (e: Exception) {
-            XposedBridge.log("Error getting resource ID: type=" + type + ", name=" + name + ", error: " + e.message)
+            YukiLog.log("Error getting resource ID: type=" + type + ", name=" + name + ", error: " + e.message)
             return -1
         }
     }
@@ -161,40 +164,121 @@ object Utils {
         return filePath.absolutePath + "/"
     }
 
-    fun copyFile(srcFile: File?, destFolder: String, name: String): String? {
+    fun copyFile(
+        srcFile: File?,
+        destFolder: String,
+        name: String,
+        onSaved: ((String) -> Unit)? = null
+    ): String? {
         if (srcFile == null || !srcFile.exists()) return "File not found or is null"
         try {
-            return copyFile(FileInputStream(srcFile), destFolder, name)
+            return copyFile(FileInputStream(srcFile), destFolder, name, onSaved)
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
             return e.message
         }
     }
 
 
-    fun copyFile(inputStream: InputStream, destFolder: String, name: String): String? {
+    fun copyFile(
+        inputStream: InputStream,
+        destFolder: String,
+        name: String,
+        onSaved: ((String) -> Unit)? = null
+    ): String? {
         val destFile = File(destFolder, name)
+        val pfd = try {
+            getClientBridge()!!.openFile(destFile.absolutePath, true)
+        } catch (e: Exception) {
+            YukiLog.log("Bridge unavailable, saving to public storage: ${e.message}")
+            return copyFileToPublicStorage(inputStream, File(destFolder).name, name, onSaved)
+        }
         try {
             inputStream.use { `in` ->
-                getClientBridge()!!.openFile(destFile.absolutePath, true)
-                    .use { parcelFileDescriptor ->
-                        val out = FileOutputStream(parcelFileDescriptor.fileDescriptor)
-                        val bArr = ByteArray(1024)
-                        while (true) {
-                            val read = `in`.read(bArr)
-                            if (read <= 0) {
-                                `in`.close()
-                                out.close()
-                                scanFile(destFile)
-                                return ""
-                            }
-                            out.write(bArr, 0, read)
+                pfd.use { parcelFileDescriptor ->
+                    val out = FileOutputStream(parcelFileDescriptor.fileDescriptor)
+                    val bArr = ByteArray(1024)
+                    while (true) {
+                        val read = `in`.read(bArr)
+                        if (read <= 0) {
+                            `in`.close()
+                            out.close()
+                            scanFile(destFile)
+                            onSaved?.invoke(destFolder)
+                            return ""
                         }
+                        out.write(bArr, 0, read)
                     }
+                }
             }
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
             return e.message
+        }
+    }
+
+    @SuppressLint("InlinedApi", "NewApi")
+    private fun copyFileToPublicStorage(
+        inputStream: InputStream,
+        subFolder: String,
+        name: String,
+        onSaved: ((String) -> Unit)?
+    ): String? {
+        val mime = MimeTypeUtils.getMimeTypeFromExtension(name)
+        val (publicDir, collection) = when {
+            mime.startsWith("image/") -> Environment.DIRECTORY_PICTURES to
+                    MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+
+            mime.startsWith("video/") -> Environment.DIRECTORY_MOVIES to
+                    MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+
+            mime.startsWith("audio/") -> Environment.DIRECTORY_MUSIC to
+                    MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+
+            else -> Environment.DIRECTORY_DOWNLOADS to
+                    MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        }
+        val relativePath = "$publicDir/WhatsApp/$subFolder"
+
+        return try {
+            inputStream.use { `in` ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val resolver = application.contentResolver
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                        if (mime.isNotEmpty()) put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                        put(MediaStore.MediaColumns.IS_PENDING, 1)
+                    }
+                    val uri = resolver.insert(collection, values)
+                        ?: return "Failed to create entry in public storage"
+                    try {
+                        resolver.openOutputStream(uri)!!.use { out -> `in`.copyTo(out) }
+                        resolver.update(uri, ContentValues().apply {
+                            put(MediaStore.MediaColumns.IS_PENDING, 0)
+                        }, null, null)
+                    } catch (e: Exception) {
+                        runCatching { resolver.delete(uri, null, null) }
+                        throw e
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    val dir = File(Environment.getExternalStorageDirectory(), relativePath)
+                    if (!dir.exists() && !dir.mkdirs()) {
+                        return "Failed to create directory: ${dir.absolutePath}"
+                    }
+                    val dest = File(dir, name)
+                    FileOutputStream(dest).use { out -> `in`.copyTo(out) }
+                    scanFile(dest)
+                    onSaved?.invoke(dir.absolutePath + "/")
+                    return ""
+                }
+            }
+            onSaved?.invoke("$relativePath/")
+            ""
+        } catch (e: Exception) {
+            YukiLog.log(e)
+            e.message ?: "Failed to save file"
         }
     }
 
@@ -280,10 +364,14 @@ object Utils {
     }
 
     fun getMyNumber(): String {
-        return FeatureLoader.mApp!!.getSharedPreferences(
-            FeatureLoader.mApp!!.packageName + "_preferences_light",
-            Context.MODE_PRIVATE
-        ).getString("ph", "")!!
+        val dataDir = getAccountDataDir()
+        return CDSharedPreferences(
+            File(
+                dataDir,
+                "shared_prefs/${FeatureLoader.mApp!!.packageName}_preferences_light.xml"
+            )
+        )
+            .getString("ph", "")!!
     }
 
 
@@ -325,6 +413,21 @@ object Utils {
     fun openLink(mActivity: Activity, url: String?) {
         val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
         mActivity.startActivity(browserIntent)
+    }
+
+    fun getAccountDataDir(): File {
+        val dataDir = application.filesDir.parentFile
+        val sw = File(dataDir, "/app_account_switching/active_account")
+        if (sw.exists()) {
+            val accountId = sw.readText().trim()
+            if (accountId.isNotEmpty()) {
+                val accountDir = File(dataDir, "/accounts/$accountId")
+                if (accountDir.exists()) {
+                    return accountDir
+                }
+            }
+        }
+        return dataDir!!
     }
 
     fun interface BinderLocalScopeBlock<T> {

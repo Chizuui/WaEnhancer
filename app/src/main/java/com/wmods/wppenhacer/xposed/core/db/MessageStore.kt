@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.text.TextUtils
 import androidx.core.database.sqlite.transaction
 import com.wmods.wppenhacer.xposed.utils.Utils
-import de.robv.android.xposed.XposedBridge
+import com.wmods.wppenhacer.xposed.utils.YukiLog
 import java.io.File
 import java.util.stream.Collectors
 
@@ -15,9 +15,7 @@ class MessageStore private constructor() {
     /**
      * Reuses WhatsApp's own connection. Opening a second connection to msgstore.db can change
      * journal/locking behavior and make WhatsApp's writers fail with SQLITE_BUSY.
-     */
-
-    /**
+     *
      * Returns null until WhatsApp has opened msgstore.db; the module must not open a second
      * connection as a fallback.
      */
@@ -63,7 +61,7 @@ class MessageStore private constructor() {
                     }
                 }
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
         }
         return message
     }
@@ -80,7 +78,7 @@ class MessageStore private constructor() {
                 }
             }
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
         }
         return ""
     }
@@ -97,7 +95,7 @@ class MessageStore private constructor() {
                 }
             }
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
         }
         return -1
     }
@@ -115,7 +113,7 @@ class MessageStore private constructor() {
                     }
                 }
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
         }
         return null
     }
@@ -132,7 +130,7 @@ class MessageStore private constructor() {
                 }
             }
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
         }
         return ""
     }
@@ -149,7 +147,7 @@ class MessageStore private constructor() {
                 }
             }
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
         }
         return message
     }
@@ -174,7 +172,7 @@ class MessageStore private constructor() {
                 }
             }
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
         }
 
         return list
@@ -185,7 +183,7 @@ class MessageStore private constructor() {
         try {
             sqLiteDatabase?.execSQL(sql)
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
         }
     }
 
@@ -195,13 +193,8 @@ class MessageStore private constructor() {
     }
 
     fun storeMessageRead(messageId: String) {
-        val db = sqLiteDatabase ?: return
-        XposedBridge.log("storeMessageRead: $messageId")
-        try {
-            db.execSQL("UPDATE message SET status = 1 WHERE key_id = \"$messageId\"")
-        } catch (e: Exception) {
-            XposedBridge.log(e)
-        }
+        YukiLog.log("storeMessageRead: $messageId")
+        executeWritableSQL("UPDATE message SET status = 1 WHERE key_id = \"$messageId\"")
     }
 
     fun isReadMessageStatus(messageId: String): Boolean {
@@ -218,7 +211,7 @@ class MessageStore private constructor() {
                 result = cursor.getInt(cursor.getColumnIndexOrThrow("status")) == 1
             }
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
         } finally {
             cursor?.close()
         }
@@ -265,7 +258,7 @@ class MessageStore private constructor() {
                 }
             }
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
         }
         return null
     }
@@ -285,89 +278,94 @@ class MessageStore private constructor() {
         val statusDbInstance = whatsappStatusDatabase?.takeIf { it.isOpen }
 
         if (statusDbInstance != null && statusDbInstance.isOpen) {
-                var statusRowId: Long? = null
-                var mediaFilePath: String? = null
+            var statusRowId: Long? = null
+            var mediaFilePath: String? = null
 
+            try {
+                statusDbInstance.query(
+                    "status",
+                    arrayOf("row_id"),
+                    "uuid=?",
+                    arrayOf(messageKey),
+                    null,
+                    null,
+                    null
+                ).use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        statusRowId = cursor.getLong(0)
+                    }
+                }
+            } catch (e: Exception) {
+                YukiLog.log(e)
+            }
+
+            if (statusRowId != null) {
                 try {
-                    statusDbInstance.query(
-                        "status",
-                        arrayOf("row_id"),
-                        "uuid=?",
-                        arrayOf(messageKey),
-                        null,
-                        null,
-                        null
+                    statusDbInstance.rawQuery(
+                        "SELECT st.thumbnail_path, mc.file_path " +
+                                "FROM status_thumbnail st " +
+                                "LEFT JOIN media_content mc ON st.media_content_row_id = mc.row_id " +
+                                "WHERE st.status_row_id = ? LIMIT 1",
+                        arrayOf(statusRowId.toString())
                     ).use { cursor ->
                         if (cursor.moveToFirst()) {
-                            statusRowId = cursor.getLong(0)
+                            val thumbPath = if (cursor.isNull(0)) null else cursor.getString(0)
+                            val mcPath = if (cursor.isNull(1)) null else cursor.getString(1)
+                            mediaFilePath = when {
+                                !thumbPath.isNullOrEmpty() -> thumbPath
+                                !mcPath.isNullOrEmpty() -> mcPath
+                                else -> null
+                            }
                         }
                     }
                 } catch (e: Exception) {
-                    XposedBridge.log(e)
+                    YukiLog.log(e)
                 }
 
-                if (statusRowId != null) {
+                if (mediaFilePath.isNullOrEmpty()) {
                     try {
                         statusDbInstance.rawQuery(
-                            "SELECT st.thumbnail_path, mc.file_path " +
-                                    "FROM status_thumbnail st " +
-                                    "LEFT JOIN media_content mc ON st.media_content_row_id = mc.row_id " +
-                                    "WHERE st.status_row_id = ? LIMIT 1",
+                            "SELECT mc.file_path " +
+                                    "FROM status_media_link sml " +
+                                    "JOIN media_content mc ON sml.media_content_row_id = mc.row_id " +
+                                    "WHERE sml.status_row_id = ? LIMIT 1",
                             arrayOf(statusRowId.toString())
                         ).use { cursor ->
                             if (cursor.moveToFirst()) {
-                                val thumbPath = if (cursor.isNull(0)) null else cursor.getString(0)
-                                val mcPath = if (cursor.isNull(1)) null else cursor.getString(1)
-                                mediaFilePath = when {
-                                    !thumbPath.isNullOrEmpty() -> thumbPath
-                                    !mcPath.isNullOrEmpty() -> mcPath
-                                    else -> null
-                                }
+                                mediaFilePath =
+                                    if (cursor.isNull(0)) null else cursor.getString(0)
                             }
                         }
                     } catch (e: Exception) {
-                        XposedBridge.log(e)
-                    }
-
-                    if (mediaFilePath.isNullOrEmpty()) {
-                        try {
-                            statusDbInstance.rawQuery(
-                                "SELECT mc.file_path " +
-                                        "FROM status_media_link sml " +
-                                        "JOIN media_content mc ON sml.media_content_row_id = mc.row_id " +
-                                        "WHERE sml.status_row_id = ? LIMIT 1",
-                                arrayOf(statusRowId.toString())
-                            ).use { cursor ->
-                                if (cursor.moveToFirst()) {
-                                    mediaFilePath = if (cursor.isNull(0)) null else cursor.getString(0)
-                                }
-                            }
-                        } catch (e: Exception) {
-                            XposedBridge.log(e)
-                        }
-                    }
-
-                    var deleted = false
-                    try {
-                        statusDbInstance.beginTransaction()
-                        try {
-                            deleted = statusDbInstance.delete("status", "row_id=?", arrayOf(statusRowId.toString())) > 0
-                            if (deleted) {
-                                statusDbInstance.setTransactionSuccessful()
-                            }
-                        } finally {
-                            statusDbInstance.endTransaction()
-                        }
-                    } catch (e: Exception) {
-                        XposedBridge.log(e)
-                    }
-
-                    if (deleted) {
-                        deleteStatusMediaFile(mediaFilePath)
-                        return true
+                        YukiLog.log(e)
                     }
                 }
+
+                var deleted = false
+                try {
+                    statusDbInstance.beginTransaction()
+                    try {
+                        deleted = statusDbInstance.delete(
+                            "status",
+                            "row_id=?",
+                            arrayOf(statusRowId.toString())
+                        ) > 0
+                        if (deleted) {
+                            statusDbInstance.setTransactionSuccessful()
+                        }
+                    } finally {
+                        statusDbInstance.endTransaction()
+                    }
+                } catch (e: Exception) {
+                    YukiLog.log(e)
+                }
+
+                if (deleted) {
+                    deleteStatusMediaFile(mediaFilePath)
+                    return true
+                }
             }
+        }
 
         val db = sqLiteDatabase ?: return false
 
@@ -394,7 +392,7 @@ class MessageStore private constructor() {
                         }
                     }
                 } catch (e: Exception) {
-                    XposedBridge.log(e)
+                    YukiLog.log(e)
                 }
 
                 if (messageRowId == null || senderJidRowId == null || chatRowId == null) {
@@ -411,7 +409,7 @@ class MessageStore private constructor() {
                         }
                     }
                 } catch (e: Exception) {
-                    XposedBridge.log(e)
+                    YukiLog.log(e)
                 }
 
                 deleted = delete("message", "_id=?", arrayOf(messageRowId.toString())) > 0
@@ -421,9 +419,8 @@ class MessageStore private constructor() {
 
                 refreshStatusRow(senderJidRowId!!, chatRowId!!)
             } catch (e: Exception) {
-                XposedBridge.log(e)
+                YukiLog.log(e)
                 deleted = false
-            } finally {
             }
         }
 
@@ -470,7 +467,7 @@ class MessageStore private constructor() {
                 }
             }
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
         }
 
         if (totalCount == 0) {

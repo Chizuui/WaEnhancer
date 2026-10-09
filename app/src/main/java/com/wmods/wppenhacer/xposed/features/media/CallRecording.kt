@@ -2,25 +2,27 @@ package com.wmods.wppenhacer.xposed.features.media
 
 import android.Manifest
 import android.app.Activity
+import android.content.ContentValues
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.media.MediaRecorder
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.ParcelFileDescriptor
+import android.provider.MediaStore
 import android.text.TextUtils
 import android.widget.Toast
 import androidx.core.content.ContextCompat
+import com.highcapable.kavaref.KavaRef.Companion.resolve
 import com.wmods.wppenhacer.xposed.bridge.WaeIIFace
 import com.wmods.wppenhacer.xposed.core.Feature
 import com.wmods.wppenhacer.xposed.core.FeatureLoader
 import com.wmods.wppenhacer.xposed.core.WppCore
 import com.wmods.wppenhacer.xposed.core.components.FMessageWpp
 import com.wmods.wppenhacer.xposed.core.devkit.Unobfuscator
+import com.wmods.wppenhacer.xposed.utils.ReflectionUtils
 import com.wmods.wppenhacer.xposed.utils.Utils
-import de.robv.android.xposed.XC_MethodHook
-import android.content.SharedPreferences 
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
 import org.json.JSONArray
 import org.luckypray.dexkit.query.enums.StringMatchType
 import java.io.File
@@ -39,11 +41,12 @@ import java.util.concurrent.atomic.AtomicReference
 
 class CallRecording(
     loader: ClassLoader,
-    preferences:SharedPreferences
+    preferences: SharedPreferences
 ) : Feature(loader, preferences) {
 
     private val isRecording = AtomicBoolean(false)
     private val isCallConnected = AtomicBoolean(false)
+    private val outputUriRef = AtomicReference<Uri?>()
     private val mediaRecorderRef = AtomicReference<MediaRecorder?>()
     private val outputPfdRef = AtomicReference<ParcelFileDescriptor?>()
     private val outputStreamRef = AtomicReference<FileOutputStream?>()
@@ -60,7 +63,7 @@ class CallRecording(
 
     @Throws(Throwable::class)
     override fun doHook() {
-        if (!prefs.getBoolean("call_recording_enable", false)) {
+        if (!xprefs.getBoolean("call_recording_enable", false)) {
             logDebug("WaEnhancer: Call Recording is disabled")
             return
         }
@@ -82,33 +85,29 @@ class CallRecording(
             logDebug("WaEnhancer: Found VoiceServiceEventCallback: ${clsCallEventCallback.name}")
 
             try {
-                XposedBridge.hookAllMethods(
-                    clsCallEventCallback,
-                    "fieldstatsReady",
-                    object : XC_MethodHook() {
-                        override fun afterHookedMethod(param: MethodHookParam) {
-                            handleCallEnded("fieldstatsReady")
-                        }
+                clsCallEventCallback.resolve().method {
+                    name = "fieldstatsReady"
+                }.hookAll {
+                    after {
+                        handleCallEnded("fieldstatsReady")
                     }
-                )
+                }
                 hooksInstalled++
             } catch (e: Throwable) {
                 logDebug("WaEnhancer: Could not hook fieldstatsReady: ${e.message}")
             }
 
             try {
-                XposedBridge.hookAllMethods(
-                    clsCallEventCallback,
-                    "soundPortCreated",
-                    object : XC_MethodHook() {
-                        override fun afterHookedMethod(param: MethodHookParam) {
-                            logDebug("WaEnhancer: soundPortCreated - will record after 3s")
-                            extractUserJid(param.thisObject)
-                            isCallConnected.set(true)
-                            scheduleDelayedStart()
-                        }
+                clsCallEventCallback.resolve().method {
+                    name = "soundPortCreated"
+                }.hookAll {
+                    after {
+                        logDebug("WaEnhancer: soundPortCreated - will record after 3s")
+                        extractUserJid(instance)
+                        isCallConnected.set(true)
+                        scheduleDelayedStart()
                     }
-                )
+                }
                 hooksInstalled++
             } catch (e: Throwable) {
                 logDebug("WaEnhancer: Could not hook soundPortCreated: ${e.message}")
@@ -127,15 +126,13 @@ class CallRecording(
             if (Activity::class.java.isAssignableFrom(voipActivityClass)) {
                 logDebug("WaEnhancer: Found VoipActivity: ${voipActivityClass.name}")
 
-                XposedBridge.hookAllMethods(
-                    voipActivityClass,
-                    "onDestroy",
-                    object : XC_MethodHook() {
-                        override fun beforeHookedMethod(param: MethodHookParam) {
-                            handleCallEnded("VoipActivity.onDestroy")
-                        }
+                voipActivityClass.resolve().method {
+                    name = "onDestroy"
+                }.hookAll {
+                    before {
+                        handleCallEnded("VoipActivity.onDestroy")
                     }
-                )
+                }
                 hooksInstalled++
             }
         } catch (e: Throwable) {
@@ -186,10 +183,10 @@ class CallRecording(
         if (callback == null) return
 
         try {
-            val callInfo = XposedHelpers.callMethod(callback, "getCallInfo") ?: return
+            val callInfo = ReflectionUtils.callMethod(callback, "getCallInfo") ?: return
 
             val peerJid = runCatching {
-                XposedHelpers.getObjectField(callInfo, "peerJid")
+                ReflectionUtils.callMethod(callInfo, "getPeerJid")
             }.getOrNull()
 
             if (peerJid != null && setCurrentUserJid(peerJid, "UserJid")) {
@@ -197,7 +194,7 @@ class CallRecording(
             }
 
             val participantsObj = runCatching {
-                XposedHelpers.getObjectField(callInfo, "participants")
+                ReflectionUtils.getObjectField(callInfo, "participants")
             }.getOrNull()
 
             if (participantsObj is Map<*, *>) {
@@ -277,7 +274,11 @@ class CallRecording(
                 return
             }
 
-            if (ContextCompat.checkSelfPermission(app, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            if (ContextCompat.checkSelfPermission(
+                    app,
+                    Manifest.permission.RECORD_AUDIO
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
                 logDebug("WaEnhancer: No RECORD_AUDIO permission")
                 return
             }
@@ -293,7 +294,7 @@ class CallRecording(
             val defaultPath = Environment
                 .getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                 .absolutePath
-            val settingsPath = prefs.getString("call_recording_path", defaultPath) ?: defaultPath
+            val settingsPath = xprefs.getString("call_recording_path", defaultPath) ?: defaultPath
 
             val parentDir = File(settingsPath, "WA Call Recordings")
             val appDir = File(parentDir, appName)
@@ -306,8 +307,9 @@ class CallRecording(
             outputFileRef.set(outputTarget.file)
             outputPfdRef.set(outputTarget.parcelFileDescriptor)
             outputStreamRef.set(outputTarget.outputStream)
+            outputUriRef.set(outputTarget.uri)
 
-            if (prefs.getBoolean("call_recording_use_root", false)) {
+            if (xprefs.getBoolean("call_recording_use_root", false)) {
                 grantVoiceCallPermission()
             }
 
@@ -328,10 +330,11 @@ class CallRecording(
                 "MIC"
             )
 
-            val recorderSelection = createStartedRecorder(audioSources, sourceNames, outputTarget.fd)
+            val recorderSelection =
+                createStartedRecorder(audioSources, sourceNames, outputTarget.fd)
             if (recorderSelection == null) {
                 logDebug("WaEnhancer: All audio sources failed")
-                closeOutputResources(deleteOutputFile = false)
+                closeOutputResources(deleteOutputFile = outputTarget.uri != null)
                 return
             }
 
@@ -339,13 +342,13 @@ class CallRecording(
             if (!isRecording.compareAndSet(false, true)) {
                 releaseRecorder(recorderSelection.recorder, stopBeforeRelease = true)
                 mediaRecorderRef.set(null)
-                closeOutputResources(deleteOutputFile = false)
+                closeOutputResources(deleteOutputFile = outputTarget.uri != null)
                 return
             }
 
             logDebug("WaEnhancer: Recording started (${recorderSelection.sourceName}): ${outputTarget.file.absolutePath}")
 
-            if (prefs.getBoolean("call_recording_toast", false)) {
+            if (xprefs.getBoolean("call_recording_toast", false)) {
                 Utils.showToast("Recording started", Toast.LENGTH_SHORT)
             }
         } catch (e: Exception) {
@@ -455,16 +458,20 @@ class CallRecording(
             }
 
             outputFile = outputFileRef.get()
+            val hadMediaStoreUri = outputUriRef.get() != null
             closeOutputResources(deleteOutputFile = !saved)
 
             logDebug("WaEnhancer: Recording stopped, file=${outputFile?.absolutePath ?: "unknown"}")
 
-            if (saved && outputFile != null) {
+            if (saved && outputFile != null && !hadMediaStoreUri) {
                 Utils.scanFile(outputFile)
             }
 
-            if (prefs.getBoolean("call_recording_toast", false)) {
-                Utils.showToast(if (saved) "Recording saved!" else "Recording failed", Toast.LENGTH_SHORT)
+            if (xprefs.getBoolean("call_recording_toast", false)) {
+                Utils.showToast(
+                    if (saved) "Recording saved!" else "Recording failed",
+                    Toast.LENGTH_SHORT
+                )
             }
 
             currentUserJid.set(null)
@@ -494,6 +501,7 @@ class CallRecording(
         val stream = outputStreamRef.getAndSet(null)
         val pfd = outputPfdRef.getAndSet(null)
         val outputFile = outputFileRef.getAndSet(null)
+        val mediaUri = outputUriRef.getAndSet(null)
 
         try {
             stream?.close()
@@ -503,6 +511,20 @@ class CallRecording(
         try {
             pfd?.close()
         } catch (_: IOException) {
+        }
+
+        if (mediaUri != null) {
+            runCatching {
+                val resolver = Utils.application.contentResolver
+                if (deleteOutputFile) {
+                    resolver.delete(mediaUri, null, null)
+                } else {
+                    resolver.update(mediaUri, ContentValues().apply {
+                        put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    }, null, null)
+                }
+            }.onFailure { logDebug("WaEnhancer: Could not finalize MediaStore recording: ${it.message}") }
+            return
         }
 
         if (deleteOutputFile && outputFile != null && outputFile.exists() && !outputFile.delete()) {
@@ -528,11 +550,13 @@ class CallRecording(
                         parcelFileDescriptor.fileDescriptor
                     )
                 }
-                logDebug("WaEnhancer: Bridge openFile returned null, fallback to Android/data path")
+                logDebug("WaEnhancer: Bridge openFile returned null, fallback to public storage")
             } catch (t: Throwable) {
-                logDebug("WaEnhancer: Bridge openFile failed, fallback to Android/data path: ${t.message}")
+                logDebug("WaEnhancer: Bridge openFile failed, fallback to public storage: ${t.message}")
             }
         }
+
+        openPublicOutputTarget(fileName)?.let { return it }
 
         val app = FeatureLoader.mApp ?: throw IOException("Could not resolve app context")
         val appExternalDir = app.getExternalFilesDir(null)
@@ -550,11 +574,57 @@ class CallRecording(
         return OutputTarget(fallbackFile, null, fallbackStream, fallbackStream.fd)
     }
 
+    /**
+     * Public fallback when the bridge is unavailable. Uses Music/WaEnhancer/Recordings, which is
+     * one of the folders scanned by the Recordings screen in the WAE app.
+     */
+    private fun openPublicOutputTarget(fileName: String): OutputTarget? {
+        val relativePath = "${Environment.DIRECTORY_MUSIC}/WaEnhancer/Recordings"
+        @Suppress("DEPRECATION")
+        val file = File(File(Environment.getExternalStorageDirectory(), relativePath), fileName)
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val resolver = Utils.application.contentResolver
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, "audio/mp4")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+                val uri = resolver.insert(
+                    MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+                    values
+                ) ?: return null
+                val pfd = try {
+                    resolver.openFileDescriptor(uri, "rw")
+                } catch (t: Throwable) {
+                    null
+                }
+                if (pfd == null) {
+                    runCatching { resolver.delete(uri, null, null) }
+                    return null
+                }
+                logDebug("WaEnhancer: Recording fallback path in public storage: ${file.absolutePath}")
+                OutputTarget(file, pfd, null, pfd.fileDescriptor, uri)
+            } else {
+                val dir = file.parentFile ?: return null
+                if (!dir.exists() && !dir.mkdirs()) return null
+                val stream = FileOutputStream(file)
+                logDebug("WaEnhancer: Recording fallback path in public storage: ${file.absolutePath}")
+                OutputTarget(file, null, stream, stream.fd)
+            }
+        } catch (t: Throwable) {
+            logDebug("WaEnhancer: Public storage fallback failed: ${t.message}")
+            null
+        }
+    }
+
     private data class OutputTarget(
         val file: File,
         val parcelFileDescriptor: ParcelFileDescriptor?,
         val outputStream: FileOutputStream?,
-        val fd: FileDescriptor
+        val fd: FileDescriptor,
+        val uri: Uri? = null
     )
 
     private data class RecorderSelection(
@@ -564,12 +634,12 @@ class CallRecording(
 
     private fun shouldRecord(phoneNumber: String?): Boolean {
         try {
-            val mode = prefs.getString("call_recording_mode", "0")?.toIntOrNull() ?: 0
+            val mode = xprefs.getString("call_recording_mode", "0")?.toIntOrNull() ?: 0
 
             if (mode == 0) return true
 
-            val blacklist = prefs.getString("call_recording_blacklist", "[]")
-            val whitelist = prefs.getString("call_recording_whitelist", "[]")
+            val blacklist = xprefs.getString("call_recording_blacklist", "[]")
+            val whitelist = xprefs.getString("call_recording_whitelist", "[]")
 
             return when (mode) {
                 2 -> {

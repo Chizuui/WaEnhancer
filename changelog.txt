@@ -1,13 +1,6 @@
-[ADDED]
-* Added support for WA/WB 2.26.33.xx
-
 [FIXED]
-* Fixed writing bug in the database
-* Fixed bug when restarting Whatsapp
-* Fixed bug in hiding the tick (sometimes it crashed when trying to hide the tick)
-* Fixed random crashes in the WAE
-* Fixed bug in ToastViewer (Thanks to @Fe7ice)
-
-[IMPROVED]
-* Improvement in HD video upload (It has not been completely fixed, but now it is possible to send HD videos more easily)
-* Improved handling for disabling WhatsApp version expiration
+* Fixed WhatsApp closing by itself when opening the document picker on some devices
+* Fixed the contact list not showing your contacts when choosing contacts inside the module
+* Fixed groups appearing without a name in the contact list; they now show their real names
+* Fixed a confusing error message when the module could not be found, and the module now starts up more reliably
+* Removed an unnecessary pop-up message that appeared when the connection to the module failed

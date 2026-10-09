@@ -1,5 +1,3 @@
-import com.android.build.api.variant.impl.VariantOutputImpl
-import com.android.build.gradle.internal.api.BaseVariantOutputImpl
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
@@ -42,8 +40,8 @@ android {
         minSdk = 28
         //noinspection OldTargetApi
         targetSdk = 34
-        versionCode = 154
-        versionName = "1.5.5 ($gitHash)"
+        versionCode = 161
+        versionName = "1.6.1 ($gitHash)"
         multiDexEnabled = true
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -63,7 +61,7 @@ android {
             abiFilters.add("arm64-v8a")
         }
 
-        buildConfigField("Boolean", "RESET_ON_INSTALL", "false")
+        buildConfigField("Boolean", "RESET_ON_INSTALL", "true")
 
     }
 
@@ -132,6 +130,8 @@ android {
         baseline = file("lint-baseline.xml")
     }
 
+    androidResources.additionalParameters += listOf("--allow-reserved-package-id", "--package-id", "0x64")
+
 }
 
 androidComponents {
@@ -141,7 +141,20 @@ androidComponents {
             else -> "WaEnhancer"
         }
         variant.outputs.forEach { output ->
-            (output as VariantOutputImpl).outputFileName.set("$appName-1.5.5 ($gitHash).apk")
+            output.outputFileName.set(output.versionName.map { "$appName-$it.apk" })
+        }
+
+        // Hotfix: YukiHookAPI's KSP generates xposed_init / yukihookapi_init, so the
+        // asset and resource merge tasks must run after it or the entrypoint is missing.
+        val cap = variant.name.replaceFirstChar { c ->
+            if (c.isLowerCase()) c.titlecase(Locale.getDefault()) else c.toString()
+        }
+        val kspTask = "ksp${cap}Kotlin"
+        tasks.matching { it.name == "merge${cap}Assets" }.configureEach {
+            dependsOn(kspTask)
+        }
+        tasks.matching { it.name == "merge${cap}JavaResource" }.configureEach {
+            dependsOn(kspTask)
         }
     }
 }
@@ -153,10 +166,15 @@ kotlin {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     implementation(libs.colorpicker)
     implementation(files("libs/dexkit-android.aar"))
     implementation(libs.flatbuffers)
     compileOnly(libs.libxposed.legacy)
+    implementation(libs.yukihookapi.api)
+    implementation(libs.kavaref.core)
+    implementation(libs.kavaref.extension)
+    ksp(libs.yukihookapi.ksp.xposed)
     ksp(libs.androidx.room.compiler)
 
     implementation(libs.core)
@@ -182,6 +200,7 @@ dependencies {
     implementation(libs.arscblamer)
     implementation(libs.markwon.core)
     implementation(libs.remote.preferences)
+    implementation(libs.androidx.datastore.preferences)
 }
 
 
@@ -206,26 +225,27 @@ afterEvaluate {
     listOf("installWhatsappDebug", "installBusinessDebug").forEach { taskName ->
         tasks.findByName(taskName)?.doLast {
             runCatching {
-                val injected  = project.objects.newInstance<InjectedExecOps>()
+                val injected = project.objects.newInstance<InjectedExecOps>()
                 runBlocking {
-                    delay(500.milliseconds)
+                    delay(1000.milliseconds)
                     injected.execOps.exec {
                         commandLine(
                             "adb",
                             "shell",
                             "am",
                             "force-stop",
-                            project.findProperty("debug_package_name")?.toString()
+                            project.properties["debug_package_name"]?.toString()
                         )
                     }
+                    delay(3000.milliseconds)
                     injected.execOps.exec {
                         commandLine(
                             "adb",
                             "shell",
-                            "monkey",
-                            "-p",
-                            project.findProperty("debug_package_name")?.toString(),
-                            "1"
+                            "am",
+                            "start",
+                            "-n",
+                            "$(cmd package resolve-activity --brief ${project.properties["debug_package_name"]} | tail -n 1)"
                         )
                     }
                 }

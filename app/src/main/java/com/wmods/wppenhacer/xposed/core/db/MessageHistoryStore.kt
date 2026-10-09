@@ -1,15 +1,17 @@
 package com.wmods.wppenhacer.xposed.core.db
 
 import android.content.Context
+import android.os.Handler
 import android.os.Looper
 import android.util.LruCache
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.wmods.wppenhacer.xposed.core.components.FMessageWpp
+import com.wmods.wppenhacer.xposed.core.db.entity.DeviceEntity
 import com.wmods.wppenhacer.xposed.core.db.entity.HideSeenEntity
 import com.wmods.wppenhacer.xposed.core.db.entity.MessageEntity
 import com.wmods.wppenhacer.xposed.utils.Utils
-import de.robv.android.xposed.XposedBridge
+import com.wmods.wppenhacer.xposed.utils.YukiLog
 import java.util.concurrent.ConcurrentHashMap
 
 class MessageHistoryStore private constructor(context: Context) {
@@ -54,14 +56,17 @@ class MessageHistoryStore private constructor(context: Context) {
     private val seenMessageCache = LruCache<String, MessageSeenItem>(SEEN_MESSAGE_CACHE_SIZE)
     private val seenMessagesListCache =
         LruCache<String, List<MessageSeenItem>>(SEEN_MESSAGES_LIST_CACHE_SIZE)
+    private val deviceCache = LruCache<String, Int>(DEVICE_CACHE_SIZE)
+    private val cacheLock = Any()
     private val loadingCacheKeys = ConcurrentHashMap.newKeySet<String>()
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val db: MessageHistoryDatabase = Room.databaseBuilder(
         context.applicationContext,
         MessageHistoryDatabase::class.java,
         "MessageHistory.db"
     )
-        .addMigrations(MIGRATION_5_6)
+        .addMigrations(MIGRATION_5_6, MessageHistoryDatabase.MIGRATION_6_7)
         .setQueryExecutor(Utils.databaseExecutor)
         .setTransactionExecutor(Utils.databaseExecutor)
         .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
@@ -70,11 +75,13 @@ class MessageHistoryStore private constructor(context: Context) {
 
     private val messageDao = db.messageDao()
     private val hideSeenDao = db.hideSeenDao()
+    private val deviceDao = db.deviceDao()
 
     companion object {
         private const val MESSAGE_CACHE_SIZE = 100
         private const val SEEN_MESSAGE_CACHE_SIZE = 200
         private const val SEEN_MESSAGES_LIST_CACHE_SIZE = 50
+        private const val DEVICE_CACHE_SIZE = 300
 
         private val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
@@ -86,6 +93,7 @@ class MessageHistoryStore private constructor(context: Context) {
         }
 
         private val EMPTY_SEEN_ITEM = MessageSeenItem("", "", false)
+        private const val EMPTY_DEVICE_TYPE = -1
         private val EMPTY_MESSAGE_LIST = ArrayList<MessageItem>()
 
         @Volatile
@@ -124,7 +132,7 @@ class MessageHistoryStore private constructor(context: Context) {
             )
             messagesCache.remove(id)
         } catch (t: Throwable) {
-            XposedBridge.log(t)
+            YukiLog.log(t)
         }
     }
 
@@ -143,7 +151,7 @@ class MessageHistoryStore private constructor(context: Context) {
                 }
                 insertMessage(id, message, timestamp)
             } catch (t: Throwable) {
-                XposedBridge.log(t)
+                YukiLog.log(t)
             }
         }
     }
@@ -177,7 +185,7 @@ class MessageHistoryStore private constructor(context: Context) {
                 messagesCache.put(v, EMPTY_MESSAGE_LIST)
             }
         } catch (t: Throwable) {
-            XposedBridge.log(t)
+            YukiLog.log(t)
         }
         return null
     }
@@ -233,7 +241,7 @@ class MessageHistoryStore private constructor(context: Context) {
             invalidateSeenMessagesListCache(jid, type)
             hideSeenChangeListener?.onHideSeenChanged(jid, messageId, type, viewed)
         } catch (t: Throwable) {
-            XposedBridge.log(t)
+            YukiLog.log(t)
         }
     }
 
@@ -294,7 +302,7 @@ class MessageHistoryStore private constructor(context: Context) {
             hideSeenChangeListener?.onHideSeenChanged(jid, messageId, type, viewed)
             return true
         } catch (t: Throwable) {
-            XposedBridge.log(t)
+            YukiLog.log(t)
             return false
         }
     }
@@ -340,7 +348,7 @@ class MessageHistoryStore private constructor(context: Context) {
                 seenMessageCache.put(cacheKey, EMPTY_SEEN_ITEM)
             }
         } catch (t: Throwable) {
-            XposedBridge.log(t)
+            YukiLog.log(t)
         }
         return null
     }
@@ -387,7 +395,85 @@ class MessageHistoryStore private constructor(context: Context) {
                 seenMessagesListCache.put(cacheKey, emptyList())
             }
         } catch (t: Throwable) {
-            XposedBridge.log(t)
+            YukiLog.log(t)
+        }
+        return null
+    }
+
+    fun insertDeviceInfo(userjid: String, messageId: String, deviceType: Int) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            insertDeviceInfoAsync(userjid, messageId, deviceType)
+            return
+        }
+
+        try {
+            deviceDao.insertOrReplace(
+                DeviceEntity(
+                    userjid = userjid,
+                    messageId = messageId,
+                    deviceType = deviceType
+                )
+            )
+            val cacheKey = createDeviceCacheKey(userjid, messageId)
+            synchronized(cacheLock) {
+                deviceCache.put(cacheKey, deviceType)
+                deviceCache.put(messageId, deviceType)
+            }
+        } catch (t: Throwable) {
+            YukiLog.log(t)
+        }
+    }
+
+    fun insertDeviceInfoAsync(userjid: String, messageId: String, deviceType: Int) {
+        Utils.databaseExecutor.execute {
+            insertDeviceInfo(userjid, messageId, deviceType)
+        }
+    }
+
+    fun getDeviceType(
+        userjid: String?,
+        messageId: String,
+        onLoaded: (() -> Unit)? = null
+    ): Int? {
+        val cacheKey = if (userjid != null) createDeviceCacheKey(userjid, messageId) else messageId
+        val cached = synchronized(cacheLock) {
+            deviceCache.get(cacheKey) ?: deviceCache.get(messageId)
+        }
+
+        if (cached != null) {
+            return if (cached == EMPTY_DEVICE_TYPE) null else cached
+        }
+
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            scheduleCacheLoad("device:$cacheKey") {
+                getDeviceType(userjid, messageId)
+                onLoaded?.let { callback ->
+                    mainHandler.post { callback() }
+                }
+            }
+            return null
+        }
+
+        try {
+            val type = if (userjid != null) {
+                deviceDao.getDeviceType(userjid, messageId)
+                    ?: deviceDao.getDeviceTypeByMessageId(messageId)
+            } else {
+                deviceDao.getDeviceTypeByMessageId(messageId)
+            }
+
+            synchronized(cacheLock) {
+                if (type != null) {
+                    deviceCache.put(cacheKey, type)
+                    deviceCache.put(messageId, type)
+                } else {
+                    deviceCache.put(cacheKey, EMPTY_DEVICE_TYPE)
+                    deviceCache.put(messageId, EMPTY_DEVICE_TYPE)
+                }
+            }
+            return type
+        } catch (t: Throwable) {
+            YukiLog.log(t)
         }
         return null
     }
@@ -396,6 +482,9 @@ class MessageHistoryStore private constructor(context: Context) {
         messagesCache.evictAll()
         seenMessageCache.evictAll()
         seenMessagesListCache.evictAll()
+        synchronized(cacheLock) {
+            deviceCache.evictAll()
+        }
     }
 
     private fun scheduleCacheLoad(key: String, load: () -> Unit) {
@@ -423,6 +512,10 @@ class MessageHistoryStore private constructor(context: Context) {
         viewed: Boolean
     ): String {
         return "${jid}_${type.ordinal}_${if (viewed) "1" else "0"}"
+    }
+
+    private fun createDeviceCacheKey(userjid: String, messageId: String): String {
+        return "${userjid}_${messageId}"
     }
 
     private fun invalidateSeenMessagesListCache(jid: String, type: ReceiptType) {

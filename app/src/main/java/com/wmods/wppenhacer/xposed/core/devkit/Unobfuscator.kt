@@ -22,8 +22,7 @@ import com.wmods.wppenhacer.xposed.core.WppCore
 import com.wmods.wppenhacer.xposed.core.components.FMessageWpp
 import com.wmods.wppenhacer.xposed.utils.ReflectionUtils
 import com.wmods.wppenhacer.xposed.utils.Utils
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import com.wmods.wppenhacer.xposed.utils.YukiLog
 import org.luckypray.dexkit.DexKitBridge
 import org.luckypray.dexkit.query.enums.StringMatchType
 import org.luckypray.dexkit.query.matchers.base.OpCodesMatcher
@@ -229,6 +228,19 @@ object Unobfuscator {
 
     @Throws(Exception::class)
     @JvmStatic
+    fun loadSharedMessageProcessorHandlePlaintextMethod(classLoader: ClassLoader): Method {
+        return UnobfuscatorCache.getInstance().getMethod(classLoader) {
+            findFirstMethodUsingStrings(
+                classLoader,
+                StringMatchType.Contains,
+                "SharedMessageProcessor/handlePlaintext"
+            )
+                ?: throw NoSuchMethodException("SharedMessageProcessor/handlePlaintext method not found")
+        }
+    }
+
+    @Throws(Exception::class)
+    @JvmStatic
     fun loadReceiptMethod(classLoader: ClassLoader): Method {
         return UnobfuscatorCache.getInstance().getMethod(classLoader) {
             val classDeviceJid =
@@ -281,8 +293,6 @@ object Unobfuscator {
         }
     }
 
-    @Throws(Exception::class)
-    @JvmStatic
     fun loadForwardTagMethod(classLoader: ClassLoader): Method {
         return UnobfuscatorCache.getInstance().getMethod(classLoader) {
             val messageInfoClass = loadFMessageClass(classLoader)
@@ -362,18 +372,21 @@ object Unobfuscator {
         }
     }
 
-    @Throws(Exception::class)
-    @JvmStatic
     fun loadForwardClassMethod(classLoader: ClassLoader): Class<*> {
         return UnobfuscatorCache.getInstance().getClass(classLoader) {
-            for (s in arrayOf(
-                "UserActions/userActionForwardMessage",
-                "UserActionsMessageForwarding/userActionForwardMessage"
-            )) {
-                val cls = findFirstClassUsingStrings(classLoader, StringMatchType.Contains, s)
-                if (cls != null) return@getClass cls
-            }
-            throw ClassNotFoundException("ForwardClass method not found")
+            bridge.findClass {
+                matcher {
+                    anyOf {
+                        match {
+                            usingStrings("UserActions/userActionForwardMessage")
+                        }
+                        match {
+                            usingStrings("UserActionsMessageForwarding/userActionForwardMessage")
+                        }
+                    }
+                }
+            }.firstOrNull()?.getInstance(classLoader)
+                ?: throw ClassNotFoundException("ForwardClass method not found")
         }
     }
 
@@ -451,7 +464,7 @@ object Unobfuscator {
     @JvmStatic
     fun loadTabFragmentMethod(classLoader: ClassLoader): Method {
         return UnobfuscatorCache.getInstance().getMethod(classLoader) {
-            val clsFrag = XposedHelpers.findClass(
+            val clsFrag = ReflectionUtils.findClass(
                 "com.whatsapp.conversationslist.ConversationsFragment",
                 classLoader
             )
@@ -878,7 +891,7 @@ object Unobfuscator {
     @JvmStatic
     fun loadUnknownStatusPlaybackMethod(loader: ClassLoader): Method {
         return UnobfuscatorCache.getInstance().getMethod(loader) {
-            val statusPlaybackClass = XposedHelpers.findClass(
+            val statusPlaybackClass = ReflectionUtils.findClass(
                 "com.whatsapp.status.playback.fragment.StatusPlaybackContactFragment",
                 loader
             )
@@ -937,7 +950,7 @@ object Unobfuscator {
             val result =
                 findFirstClassUsingStrings(loader, StringMatchType.Contains, "WaJobManager/start")
                     ?: throw Exception("BlueOnReplayWaJobManager method not found")
-            val job = XposedHelpers.findClass("org.whispersystems.jobqueue.Job", loader)
+            val job = ReflectionUtils.findClass("org.whispersystems.jobqueue.Job", loader)
             Arrays.stream(result.methods)
                 .filter { m -> m.parameterCount == 1 && m.parameterTypes[0] === job }
                 .findFirst()
@@ -1046,16 +1059,20 @@ object Unobfuscator {
     @JvmStatic
     fun loadStatusUserMethod(loader: ClassLoader): Method {
         return UnobfuscatorCache.getInstance().getMethod(loader) {
-            val id = UnobfuscatorCache.getInstance().getOfuscateIDString("lastseensun%s")
+            val id = UnobfuscatorCache.getInstance().getOfuscateIDString("last seen %s")
             if (id < 1) throw Exception("GetStatusUser ID not found")
             val result = bridge.findMethod {
                 matcher {
                     addUsingNumber(id)
                     returnType(String::class.java)
                 }
-            }
-            if (result.isEmpty()) throw Exception("GetStatusUser method not found")
-            result[result.size - 1].getMethodInstance(loader)
+            }.firstOrNull() ?: bridge.findMethod {
+                matcher {
+                    addUsingNumber(id)
+                }
+            }.firstOrNull()?.callers?.firstOrNull { it.paramCount == 3 }
+            ?: throw Exception("GetStatusUser method not found")
+            result.getMethodInstance(loader)
         }
     }
 
@@ -1415,7 +1432,7 @@ object Unobfuscator {
     @JvmStatic
     fun loadGetViewConversationMethod(loader: ClassLoader): Method {
         return UnobfuscatorCache.getInstance().getMethod(loader) {
-            val clazz = XposedHelpers.findClass(
+            val clazz = ReflectionUtils.findClass(
                 "com.whatsapp.conversationslist.ConversationsFragment",
                 loader
             )
@@ -1430,7 +1447,7 @@ object Unobfuscator {
     @JvmStatic
     fun loadOnMenuItemSelected(loader: ClassLoader): Method {
         return UnobfuscatorCache.getInstance().getMethod(loader) {
-            val aClass = XposedHelpers.findClass("androidx.viewpager.widget.ViewPager", loader)
+            val aClass = ReflectionUtils.findClass("androidx.viewpager.widget.ViewPager", loader)
             val result = Arrays.stream(aClass.declaredMethods).filter { m ->
                 m.parameterCount == 4 &&
                         m.parameterTypes[0] == Int::class.javaPrimitiveType &&
@@ -1452,7 +1469,7 @@ object Unobfuscator {
                     addUsingString("UpdatesViewModel/")
                 }
             }.firstOrNull()
-            val methodSeduleche = XposedHelpers.findMethodBestMatch(
+            val methodSeduleche = ReflectionUtils.findMethodBestMatch(
                 Timer::class.java,
                 "schedule",
                 TimerTask::class.java,
@@ -1606,7 +1623,7 @@ object Unobfuscator {
     @JvmStatic
     fun loadMaterialAlertDialog(loader: ClassLoader): Method {
         return UnobfuscatorCache.getInstance().getMethod(loader) {
-            val callConfirmationFragment = XposedHelpers.findClass(
+            val callConfirmationFragment = ReflectionUtils.findClass(
                 "com.whatsapp.calling.fragment.CallConfirmationFragment",
                 loader
             )
@@ -1668,7 +1685,7 @@ object Unobfuscator {
                 val invokeMethod = invoke.getMethodInstance(loader)
                 if (invokeMethod.parameterCount != 2 || invokeMethod.returnType != Boolean::class.javaPrimitiveType) continue
                 if (invokeMethod.parameterTypes[1].name.contains("jid.UserJid")) {
-                    XposedBridge.log("FIND: $invokeMethod")
+                    YukiLog.log("FIND: $invokeMethod")
                     return@getMethod invokeMethod
                 }
             }
@@ -1836,9 +1853,7 @@ object Unobfuscator {
         }
     }
 
-    @Throws(Exception::class)
-    @JvmStatic
-    fun loadSendAudioTypeMethod(classLoader: ClassLoader): Method {
+    fun loadMediaTypeMethod(classLoader: ClassLoader): Method {
         return UnobfuscatorCache.getInstance().getMethod(classLoader) {
             val classMsgReplyAct = findFirstClassUsingName(
                 classLoader,
@@ -1847,17 +1862,19 @@ object Unobfuscator {
             )
             val method = classMsgReplyAct.getMethod(
                 "onActivityResult",
-                Int::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType,
+                Int::class.java,
+                Int::class.java,
                 Intent::class.java
             )
-            val methodData = bridge.getMethodData(method) ?: return@getMethod null
+            val methodData = bridge.getMethodData(method)
+                ?: throw NoSuchMethodException("SendAudioType method not found")
             val invokes = methodData.invokes
+
             for (invoke in invokes) {
                 if (!invoke.isMethod) continue
                 val m1 = invoke.getMethodInstance(classLoader)
-                val params = listOf(*m1.parameterTypes)
-                if (params.contains(MutableList::class.java) && params.contains(Int::class.javaPrimitiveType) && params.contains(
+                val params = m1.parameterTypes.toList()
+                if (params.contains(List::class.java) && params.contains(Int::class.java) && params.contains(
                         Uri::class.java
                     )
                 ) {
@@ -1868,37 +1885,25 @@ object Unobfuscator {
         }
     }
 
-    @Throws(Exception::class)
-    @JvmStatic
     fun loadOriginFMessageField(classLoader: ClassLoader): Field {
         return UnobfuscatorCache.getInstance().getField(classLoader) {
-            val commonStrings = arrayOf(
-                "audio/ogg; codecs=opus",
-                "audio/ogg",
-                "audio/amr",
-                "audio/mp4",
-                "audio/aac"
-            )
-
-            val clazz = loadFMessageClass(classLoader)
-
-            for (str in commonStrings) {
-                try {
-                    val result = bridge.findMethod {
-                        matcher {
-                            addUsingString(str, StringMatchType.Contains)
-                        }
+            val result = bridge.findMethod {
+                matcher {
+                    usingStrings("audio/ogg; codecs=opu")
+                    returnType = Boolean::class.java.name
+                }
+            }
+            val fMessageClass = loadFMessageClass(classLoader)
+            if (result.isEmpty()) {
+                throw RuntimeException("OriginFMessageField not found")
+            }
+            for (clazz in result) {
+                val fields = clazz.usingFields
+                for (field in fields) {
+                    val f = field.field.getFieldInstance(classLoader)
+                    if (fMessageClass.isAssignableFrom(f.declaringClass)) {
+                        return@getField f
                     }
-                    if (result.isEmpty()) continue
-
-                    for (m in result) {
-                        val fields = m.usingFields
-                        for (field in fields) {
-                            val f = field.field.getFieldInstance(classLoader)
-                            if (f.declaringClass == clazz) return@getField f
-                        }
-                    }
-                } catch (_: Exception) {
                 }
             }
             throw RuntimeException("OriginFMessageField field not found")
@@ -3238,7 +3243,8 @@ object Unobfuscator {
                     paramCount(1, 5)
                 }
             }.filter { !it.paramTypeNames.isEmpty() && it.paramTypeNames[0].contains("Message") }
-                .map { it.getMethodInstance(classLoader) }.toTypedArray().ifEmpty { throw Exception("onDispatchMessage method not found") }
+                .map { it.getMethodInstance(classLoader) }.toTypedArray()
+                .ifEmpty { throw Exception("onDispatchMessage method not found") }
         }
 
     }
@@ -3323,47 +3329,37 @@ object Unobfuscator {
         }
     }
 
-    fun loadDrawSpanMethods(classLoader: ClassLoader): Array<Method> {
+    private fun findSpanMethods(classLoader: ClassLoader, name: String, paramCount: Int): Array<Method> {
+        val visited = linkedSetOf<String>()
+        val methods = linkedSetOf<Method>()
+        var frontier = listOf("android.text.style.ImageSpan", "android.text.style.ReplacementSpan")
+        while (frontier.isNotEmpty()) {
+            val next = mutableListOf<String>()
+            for (parent in frontier) {
+                bridge.findClass {
+                    matcher { superClass(parent) }
+                }.forEach { clazz ->
+                    if (!visited.add(clazz.name)) return@forEach
+                    next.add(clazz.name)
+                    clazz.methods
+                        .filter { it.isMethod && it.methodName == name && it.paramTypes.size == paramCount }
+                        .forEach { methods.add(it.getMethodInstance(classLoader)) }
+                }
+            }
+            frontier = next
+        }
+        return methods.toTypedArray()
+    }
+
+    fun loadEmojiSpanDrawMethods(classLoader: ClassLoader): Array<Method> {
         return UnobfuscatorCache.getInstance().getMethods(classLoader) {
-            bridge.findClass {
-                matcher {
-                    anyOf {
-                        match {
-                            superClass = "android.text.style.ImageSpan"
-                        }
-                        match {
-                            superClass = "android.text.style.ReplacementSpan"
-                        }
-                    }
-                }
-            }.findMethod {
-                matcher {
-                    paramCount(9)
-                    name = "draw"
-                }
-            }.map { it.getMethodInstance(classLoader) }.toTypedArray()
+            findSpanMethods(classLoader, "draw", 9)
         }
     }
 
-    fun loadGetSizeSpanMethods(classLoader: ClassLoader): Array<Method> {
+    fun loadEmojiSpanGetSizeMethods(classLoader: ClassLoader): Array<Method> {
         return UnobfuscatorCache.getInstance().getMethods(classLoader) {
-            bridge.findClass {
-                matcher {
-                    anyOf {
-                        match {
-                            superClass = "android.text.style.ImageSpan"
-                        }
-                        match {
-                            superClass = "android.text.style.ReplacementSpan"
-                        }
-                    }
-                }
-            }.findMethod {
-                matcher {
-                    paramCount(5)
-                    name = "getSize"
-                }
-            }.map { it.getMethodInstance(classLoader) }.toTypedArray()
+            findSpanMethods(classLoader, "getSize", 5)
         }
     }
 
@@ -3444,6 +3440,19 @@ object Unobfuscator {
                 StringMatchType.Contains,
                 "outgoing-launch/cm-null-contact"
             ) ?: throw NoSuchMethodException("StartOutgoingCall method not found")
+        }
+    }
+
+    @JvmStatic
+    @Throws(Exception::class)
+    fun loadReadReceiptMethod(classLoader: ClassLoader): Method {
+        return UnobfuscatorCache.getInstance().getMethod(classLoader) {
+            findFirstMethodUsingStrings(
+                classLoader,
+                StringMatchType.Contains,
+                "ReadReceipts/sendReceiptForIncomingMessage"
+            )
+                ?: throw RuntimeException("ReadReceiptMethod method not found")
         }
     }
 }

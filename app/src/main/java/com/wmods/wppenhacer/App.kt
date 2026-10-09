@@ -18,12 +18,12 @@ import androidx.preference.PreferenceManager
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.wmods.wppenhacer.activities.CrashReportActivity
 import com.wmods.wppenhacer.xposed.utils.Utils
-import de.robv.android.xposed.XposedHelpers
 import rikka.material.app.LocaleDelegate.Companion.defaultLocale
 import java.io.File
 import java.util.Locale
 
 class App : Application() {
+
     @SuppressLint("ApplySharedPref")
     override fun onCreate() {
         super.onCreate()
@@ -38,16 +38,6 @@ class App : Application() {
             changeLanguage(this)
         } catch (e: Exception) {
             Utils.showToast("[PREFS] Error accessing app data: ${e.message}")
-        }
-        if (sharedPreferences != null) {
-            try {
-                val file = XposedHelpers.getObjectField(sharedPreferences, "file") as File
-                file.setReadable(true)
-                file.setWritable(true)
-                file.setExecutable(true)
-            } catch (e: Throwable) {
-                e.printStackTrace()
-            }
         }
     }
 
@@ -157,5 +147,7 @@ class App : Application() {
         @JvmStatic
         val isOriginalPackage: Boolean
             get() = BuildConfig.APPLICATION_ID == "com.wmods.wppenhacer"
+
+
     }
 }

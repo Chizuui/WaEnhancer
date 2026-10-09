@@ -12,6 +12,8 @@ import android.text.TextUtils
 import android.util.LruCache
 import android.widget.Toast
 import androidx.core.content.edit
+import com.highcapable.kavaref.KavaRef.Companion.resolve
+import com.highcapable.yukihookapi.hook.param.PackageParam
 import com.wmods.wppenhacer.R
 import com.wmods.wppenhacer.views.dialog.BottomDialogWpp
 import com.wmods.wppenhacer.xposed.bridge.WaeIIFace
@@ -21,11 +23,10 @@ import com.wmods.wppenhacer.xposed.bridge.client.ProviderClientKt
 import com.wmods.wppenhacer.xposed.core.components.FMessageWpp
 import com.wmods.wppenhacer.xposed.core.devkit.Unobfuscator
 import com.wmods.wppenhacer.xposed.core.devkit.UnobfuscatorCache
+import com.wmods.wppenhacer.xposed.utils.CDSharedPreferences
 import com.wmods.wppenhacer.xposed.utils.ReflectionUtils
 import com.wmods.wppenhacer.xposed.utils.Utils
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import com.wmods.wppenhacer.xposed.utils.YukiLog
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.luckypray.dexkit.query.enums.StringMatchType
@@ -39,7 +40,8 @@ import java.util.concurrent.ConcurrentHashMap
 @Suppress("UNUSED")
 object WppCore {
     @JvmStatic
-    val listenerActivity: ConcurrentHashMap.KeySetView<ActivityChangeState, Boolean> = ConcurrentHashMap.newKeySet<ActivityChangeState>()
+    val listenerActivity: ConcurrentHashMap.KeySetView<ActivityChangeState, Boolean> =
+        ConcurrentHashMap.newKeySet<ActivityChangeState>()
 
     @JvmField
     internal var mCurrentActivity: Activity? = null
@@ -49,6 +51,7 @@ object WppCore {
     private var _privPrefs: SharedPreferences? = null
     private var mStartUpConfig: Any? = null
     private var mActionUser: Any? = null
+
     @Volatile
     private var mWaDatabase: SQLiteDatabase? = null
     private val contactNameCache = LruCache<String, String>(200)
@@ -73,113 +76,137 @@ object WppCore {
     private var mConversationDelegate: Any? = null
     private var statusToMessageMethod: Method? = null
     private var statusToMessageMapper: Any? = null
+    private var currentConversationJid: FMessageWpp.UserJid? = null
+
 
     @JvmStatic
     @Throws(Exception::class)
-    fun initialize(loader: ClassLoader, pref: SharedPreferences) {
-        _privPrefs = Utils.application.getSharedPreferences("WaGlobal", Context.MODE_PRIVATE)
+    fun initialize(packageParam: PackageParam, loader: ClassLoader, pref: SharedPreferences) {
+        packageParam.apply {
+            _privPrefs = Utils.application.getSharedPreferences("WaGlobal", Context.MODE_PRIVATE)
 
-        // init UserJID
-        val companionField = FMessageWpp.UserJid.TYPE_JID.getDeclaredField("Companion")
-        mGenJidMethod = ReflectionUtils.findMethodUsingFilter(companionField.type) { m ->
-            m.parameterCount == 1 && String::class.java == m.parameterTypes[0] && FMessageWpp.UserJid.TYPE_JID == m.returnType
+            // init UserJID
+            val companionField = FMessageWpp.UserJid.TYPE_JID.getDeclaredField("Companion")
+            mGenJidMethod = ReflectionUtils.findMethodUsingFilter(companionField.type) { m ->
+                m.parameterCount == 1 && String::class.java == m.parameterTypes[0] && FMessageWpp.UserJid.TYPE_JID == m.returnType
+            }
+
+            // Bottom Dialog
+            bottomDialog = Unobfuscator.loadDialogViewClass(loader)
+
+            conversationJidField = Unobfuscator.loadUserJidConversationDelegate(loader)
+            conversationJidField!!.declaringClass.resolve().constructor { }.hookAll {
+                after {
+                    mConversationDelegate = instance
+                }
+            }
+
+            // StartUpPrefs
+            val startPrefsConfig = Unobfuscator.loadStartPrefsConfig(loader)
+            startPrefsConfig.hook {
+                before {
+                    mStartUpConfig = instance
+                }
+            }
+
+            // ActionUser
+            actionUser = Unobfuscator.loadActionUser(loader)
+            YukiLog.log("ActionUser: ${actionUser?.name}")
+            actionUser!!.resolve().constructor { }.hookAll {
+                after {
+                    mActionUser = instance
+                }
+            }
+
+            // CachedMessageStore
+            cachedMessageStoreKey = Unobfuscator.loadCachedMessageStoreKey(loader)
+            cachedMessageStoreKey!!.declaringClass.resolve().constructor { }.hookAll {
+                after {
+                    mCachedMessageStore = instance
+                }
+            }
+
+            // WaJidMap
+            convertLidToJid = Unobfuscator.loadConvertLidToJid(loader)
+            convertJidToLid = Unobfuscator.loadConvertJidToLid(loader)
+            convertLidToJid!!.declaringClass.resolve().constructor { }.hookAll {
+                after {
+                    mWaJidMapRepository = instance
+                }
+            }
+
+            // load me current PhoneJid
+            val meManagerClass = Unobfuscator.loadMeManagerClass(loader)
+            meManagerPhoneJidField =
+                ReflectionUtils.getFieldByType(
+                    meManagerClass,
+                    FMessageWpp.UserJid.TYPE_PHONEUSERJID
+                )
+            meManagerClass.resolve().constructor { }.hookAll {
+                before {
+                    meManagerInstance = instance
+                }
+            }
+
+            // Load wa database
+            loadWADatabase()
+            hookStatusToMessageMapper(loader)
+            hookConversationUserJid(loader)
+            initBridge(Utils.application)
         }
-
-        // Bottom Dialog
-        bottomDialog = Unobfuscator.loadDialogViewClass(loader)
-
-        conversationJidField = Unobfuscator.loadUserJidConversationDelegate(loader)
-        XposedBridge.hookAllConstructors(
-            conversationJidField?.declaringClass,
-            object : XC_MethodHook() {
-                @Throws(Throwable::class)
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    mConversationDelegate = param.thisObject
-                }
-            })
-
-        // StartUpPrefs
-        val startPrefsConfig = Unobfuscator.loadStartPrefsConfig(loader)
-        XposedBridge.hookMethod(startPrefsConfig, object : XC_MethodHook() {
-            @Throws(Throwable::class)
-            override fun beforeHookedMethod(param: MethodHookParam) {
-                mStartUpConfig = param.thisObject
-            }
-        })
-
-        // ActionUser
-        actionUser = Unobfuscator.loadActionUser(loader)
-        XposedBridge.log("ActionUser: ${actionUser?.name}")
-        XposedBridge.hookAllConstructors(actionUser, object : XC_MethodHook() {
-            @Throws(Throwable::class)
-            override fun afterHookedMethod(param: MethodHookParam) {
-                mActionUser = param.thisObject
-            }
-        })
-
-        // CachedMessageStore
-        cachedMessageStoreKey = Unobfuscator.loadCachedMessageStoreKey(loader)
-        XposedBridge.hookAllConstructors(
-            cachedMessageStoreKey?.declaringClass,
-            object : XC_MethodHook() {
-                @Throws(Throwable::class)
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    mCachedMessageStore = param.thisObject
-                }
-            })
-
-        // WaJidMap
-        convertLidToJid = Unobfuscator.loadConvertLidToJid(loader)
-        convertJidToLid = Unobfuscator.loadConvertJidToLid(loader)
-        XposedBridge.hookAllConstructors(convertLidToJid?.declaringClass, object : XC_MethodHook() {
-            @Throws(Throwable::class)
-            override fun afterHookedMethod(param: MethodHookParam) {
-                mWaJidMapRepository = param.thisObject
-            }
-        })
-
-        // load me current PhoneJid
-        val meManagerClass = Unobfuscator.loadMeManagerClass(loader)
-        meManagerPhoneJidField =
-            ReflectionUtils.getFieldByType(meManagerClass, FMessageWpp.UserJid.TYPE_PHONEUSERJID)
-        XposedBridge.hookAllConstructors(meManagerClass, object : XC_MethodHook() {
-            @Throws(Throwable::class)
-            override fun beforeHookedMethod(param: MethodHookParam) {
-                meManagerInstance = param.thisObject
-            }
-        })
-
-        // Load wa database
-        loadWADatabase()
-        hookStatusToMessageMapper(loader)
-
-        initBridge(Utils.application)
     }
 
-    private fun hookStatusToMessageMapper(loader: ClassLoader) {
-        statusToMessageMethod = Unobfuscator.loadFStatusToFMessage(loader)
-        XposedBridge.hookAllConstructors(
-            statusToMessageMethod?.declaringClass,
-            object : XC_MethodHook() {
-                @Throws(Throwable::class)
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    statusToMessageMapper = param.thisObject
+    private fun PackageParam.hookConversationUserJid(loader: ClassLoader) {
+        val conversationClass =
+            Unobfuscator.findFirstClassUsingName(loader, StringMatchType.EndsWith, ".Conversation")
+
+        Activity::class.java.resolve().method {
+            name = "onCreate"
+        }.hookAll {
+            before {
+                if (conversationClass.isInstance(instance)) {
+                    val extras = (instance as Activity).intent.extras
+                    val jid = extras?.getString("jid")
+                    if (jid != null) {
+                        currentConversationJid = FMessageWpp.UserJid(jid)
+                    }
                 }
-            })
+            }
+        }
+
+        Activity::class.java.resolve().method {
+            name = "onDestroy"
+        }.hookAll {
+            before {
+                if (conversationClass.isInstance(instance)) {
+                    currentConversationJid = null
+                }
+            }
+        }
+
+    }
+
+    private fun PackageParam.hookStatusToMessageMapper(loader: ClassLoader) {
+        statusToMessageMethod = Unobfuscator.loadFStatusToFMessage(loader)
+        statusToMessageMethod!!.declaringClass.resolve().constructor { }.hookAll {
+            after {
+                statusToMessageMapper = instance
+            }
+        }
     }
 
     @JvmStatic
     fun getPhoneJidFromUserJid(lid: Any?): Any? {
         if (lid == null) return null
         try {
-            var rawString = XposedHelpers.callMethod(lid, "getRawString") as? String
+            var rawString = ReflectionUtils.callMethod(lid, "getRawString") as? String
             if (rawString == null || !rawString.contains("@lid")) return lid
             rawString = rawString.replaceFirst("\\.[\\d:]+@".toRegex(), "@")
             val newUser = createUserJid(rawString)
             val result = ReflectionUtils.callMethod(convertLidToJid, mWaJidMapRepository, newUser)
             return result ?: lid
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
         }
         return lid
     }
@@ -188,21 +215,21 @@ object WppCore {
     fun getUserJidFromPhoneJid(userJid: Any?): Any? {
         if (userJid == null) return null
         try {
-            var rawString = XposedHelpers.callMethod(userJid, "getRawString") as? String
+            var rawString = ReflectionUtils.callMethod(userJid, "getRawString") as? String
             if (rawString == null || rawString.contains("@lid")) return userJid
             rawString = rawString.replaceFirst("\\.[\\d:]+@".toRegex(), "@")
             val newUser = createUserJid(rawString)
             val result = ReflectionUtils.callMethod(convertJidToLid, mWaJidMapRepository, newUser)
             return result ?: userJid
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
         }
         return userJid
     }
 
     fun initBridge(context: Context) {
-        val prefsCacheHooks = UnobfuscatorCache.getInstance().sPrefsCacheHooks
-        val preferredOrder = prefsCacheHooks.getInt("preferredOrder", 1)
+        val cache = UnobfuscatorCache.getInstance()
+        val preferredOrder = cache.getHookInt("preferredOrder", 1)
 
         val primaryClient =
             if (preferredOrder == 0) ProviderClientKt() else BridgeClientKt(context)
@@ -213,19 +240,19 @@ object WppCore {
 
         if (tryConnectBridge(fallbackClient)) {
             val newPreferredOrder = if (preferredOrder == 0) 1 else 0
-            prefsCacheHooks.edit { putInt("preferredOrder", newPreferredOrder) }
+            cache.putHookInt("preferredOrder", newPreferredOrder)
             return
         }
-        throw Exception(context.getString(R.string.bridge_error))
+        YukiLog.log("Bridge not connected, continuing without it")
     }
 
     @JvmStatic
     @Throws(Exception::class)
     private fun tryConnectBridge(baseClient: BaseClient): Boolean {
         return try {
-            XposedBridge.log("Trying to connect to ${baseClient.javaClass.simpleName}")
+            YukiLog.log("Trying to connect to ${baseClient.javaClass.simpleName}")
             client = baseClient
-           runBlocking {
+            runBlocking {
                 val canLoad = baseClient.connect()
                 if (!canLoad) throw Exception()
                 true
@@ -267,7 +294,7 @@ object WppCore {
             }
         } catch (e: Exception) {
             Utils.showToast("Error in sending message:${e.message}", Toast.LENGTH_SHORT)
-            XposedBridge.log(e)
+            YukiLog.log(e)
         }
     }
 
@@ -286,7 +313,7 @@ object WppCore {
             senderMethod.invoke(getActionUser(), objMessage, s, !TextUtils.isEmpty(s))
         } catch (e: Exception) {
             Utils.showToast("Error in sending reaction:${e.message}", Toast.LENGTH_SHORT)
-            XposedBridge.log(e)
+            YukiLog.log(e)
         }
     }
 
@@ -297,7 +324,7 @@ object WppCore {
                 mActionUser = actionUser?.constructors?.get(0)?.newInstance()
             }
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
         }
         return mActionUser
     }
@@ -323,7 +350,7 @@ object WppCore {
                     execSQL("PRAGMA busy_timeout = 5000;")
                 }
             } catch (e: Exception) {
-                XposedBridge.log("WaEnhancer: Failed to open wa database: ${e.message}")
+                YukiLog.log("WaEnhancer: Failed to open wa database: ${e.message}")
             }
         }
     }
@@ -334,31 +361,59 @@ object WppCore {
     }
 
     val homeActivityClass: Class<*> by lazy {
-        Unobfuscator.findFirstClassUsingName(Utils.appClassLoader, StringMatchType.EndsWith,".HomeActivity")
+        Unobfuscator.findFirstClassUsingName(
+            Utils.appClassLoader,
+            StringMatchType.EndsWith,
+            ".HomeActivity"
+        )
     }
 
     val tabsPagerClass: Class<*> by lazy {
-        Unobfuscator.findFirstClassUsingName(Utils.appClassLoader, StringMatchType.EndsWith,".TabsPager")
+        Unobfuscator.findFirstClassUsingName(
+            Utils.appClassLoader,
+            StringMatchType.EndsWith,
+            ".TabsPager"
+        )
     }
 
     val viewOnceViewerActivityClass: Class<*> by lazy {
-        Unobfuscator.findFirstClassUsingName(Utils.appClassLoader, StringMatchType.EndsWith,".ViewOnceViewerActivity")
+        Unobfuscator.findFirstClassUsingName(
+            Utils.appClassLoader,
+            StringMatchType.EndsWith,
+            ".ViewOnceViewerActivity"
+        )
     }
 
     val aboutActivityClass: Class<*> by lazy {
-        Unobfuscator.findFirstClassUsingName(Utils.appClassLoader, StringMatchType.EndsWith,".About")
+        Unobfuscator.findFirstClassUsingName(
+            Utils.appClassLoader,
+            StringMatchType.EndsWith,
+            ".About"
+        )
     }
 
     val dataUsageActivityClass: Class<*> by lazy {
-        Unobfuscator.findFirstClassUsingName(Utils.appClassLoader, StringMatchType.EndsWith,".SettingsDataUsageActivity")
+        Unobfuscator.findFirstClassUsingName(
+            Utils.appClassLoader,
+            StringMatchType.EndsWith,
+            ".SettingsDataUsageActivity"
+        )
     }
 
     val voipManagerClass: Class<*> by lazy {
-        Unobfuscator.findFirstClassUsingName(Utils.appClassLoader, StringMatchType.EndsWith,".Voip")
+        Unobfuscator.findFirstClassUsingName(
+            Utils.appClassLoader,
+            StringMatchType.EndsWith,
+            ".Voip"
+        )
     }
 
     val voipCallInfoClass: Class<*> by lazy {
-        Unobfuscator.findFirstClassUsingName(Utils.appClassLoader, StringMatchType.EndsWith,".CallInfo")
+        Unobfuscator.findFirstClassUsingName(
+            Utils.appClassLoader,
+            StringMatchType.EndsWith,
+            ".CallInfo"
+        )
     }
 
     @JvmStatic
@@ -373,8 +428,8 @@ object WppCore {
                 if (value != null) return value as Int
             }
         }
-        val startupPrefs =
-            Utils.application.getSharedPreferences("startup_prefs", Context.MODE_PRIVATE)
+        val dataDir = Utils.getAccountDataDir()
+        val startupPrefs = CDSharedPreferences(File(dataDir, "shared_prefs/startup_prefs.xml"))
         return startupPrefs.getInt("night_mode", 0)
     }
 
@@ -431,12 +486,12 @@ object WppCore {
         if (messageKey == null) return null
         return try {
             if (mCachedMessageStore == null) {
-                XposedBridge.log("CachedMessageStore is null")
+                YukiLog.log("CachedMessageStore is null")
                 return null
             }
             cachedMessageStoreKey?.invoke(mCachedMessageStore, messageKey)
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
             null
         }
     }
@@ -447,13 +502,14 @@ object WppCore {
         return try {
             mGenJidMethod?.invoke(null, rawjid)
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
             null
         }
     }
 
     @JvmStatic
     fun getCurrentUserJid(): FMessageWpp.UserJid? {
+        if (currentConversationJid != null) return currentConversationJid
         return try {
             val conversation = getCurrentConversation() ?: return null
             var conversationDelegate = mConversationDelegate
@@ -484,7 +540,7 @@ object WppCore {
             }
             return str
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
             return str
         }
     }
@@ -492,15 +548,19 @@ object WppCore {
 
     @JvmStatic
     fun getMyName(): String {
-        val startupPrefs =
-            Utils.application.getSharedPreferences("startup_prefs", Context.MODE_PRIVATE)
+        val dataDir = Utils.getAccountDataDir()
+        val startupPrefs = CDSharedPreferences(File(dataDir, "shared_prefs/startup_prefs.xml"))
         return startupPrefs.getString("push_name", "WhatsApp") ?: "WhatsApp"
     }
 
     @JvmStatic
     fun getMainPrefs(): SharedPreferences {
-        return Utils.application.getSharedPreferences(
-            "${Utils.application.packageName}_preferences_light", Context.MODE_PRIVATE
+        val dataDir = Utils.getAccountDataDir()
+        return CDSharedPreferences(
+            File(
+                dataDir,
+                "shared_prefs/${Utils.application.packageName}_preferences_light.xml"
+            )
         )
     }
 
@@ -516,15 +576,15 @@ object WppCore {
 
     @JvmStatic
     fun getMyPhoto(): Drawable? {
-        val datafolder = Utils.application.cacheDir.parentFile
-        val file = File(datafolder, "files/me.jpg")
+        val dataDir = Utils.getAccountDataDir()
+        val file = File(dataDir, "files/me.jpg")
         if (file.exists()) return Drawable.createFromPath(file.absolutePath)
         return null
     }
 
     @JvmStatic
     fun createBottomDialog(context: Context): BottomDialogWpp {
-        return BottomDialogWpp(XposedHelpers.newInstance(bottomDialog, context, 0) as Dialog)
+        return BottomDialogWpp(ReflectionUtils.newInstance(bottomDialog!!, context, 0) as Dialog)
     }
 
     @JvmStatic
@@ -532,7 +592,10 @@ object WppCore {
         if (mCurrentActivity == null) return null
         try {
             val conversation =
-                XposedHelpers.findClass("com.whatsapp.Conversation", mCurrentActivity!!.classLoader)
+                ReflectionUtils.findClass(
+                    "com.whatsapp.Conversation",
+                    mCurrentActivity!!.classLoader
+                )
             if (conversation.isInstance(mCurrentActivity)) return mCurrentActivity
 
             if (mCurrentActivity!!.resources.configuration.smallestScreenWidthDp >= 600 && homeActivityClass.isInstance(
@@ -666,7 +729,7 @@ object WppCore {
         return try {
             FMessageWpp.UserJid(meManagerPhoneJidField?.get(meManagerInstance))
         } catch (e: Exception) {
-            XposedBridge.log(e)
+            YukiLog.log(e)
             null
         }
     }
@@ -692,12 +755,12 @@ object WppCore {
             val mapper = statusToMessageMapper
             val mapperMethod = statusToMessageMethod
             if (mapper == null || mapperMethod == null) {
-                XposedBridge.log("mMapFStatusToFMessage is null")
+                YukiLog.log("mMapFStatusToFMessage is null")
                 return null
             }
             mapperMethod.invoke(mapper, status)
         } catch (exception: Exception) {
-            XposedBridge.log(exception)
+            YukiLog.log(exception)
             null
         }
     }
@@ -722,7 +785,7 @@ object WppCore {
         fun onChange(activity: Activity, type: ChangeType)
 
         enum class ChangeType {
-            CREATED, STARTED, ENDED, RESUMED, PAUSED,DESTROYED;
+            CREATED, STARTED, ENDED, RESUMED, PAUSED, DESTROYED;
         }
     }
 }
